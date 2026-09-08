@@ -183,8 +183,8 @@ async function sendOneTweet(
         continue;
       }
       if (result.status === 401 || result.status === 403) {
-        await log('error', `Authentication failed (HTTP ${result.status}). Stopping automation — refresh your X session cookies.`);
-        await supabase.from('bot_configs').update({ is_active: false }).eq('id', configId);
+        await log('warn', `⚠️ Authorization error — refresh cookies. Skipping this tweet and retrying next tick.`);
+        // Do NOT stop automation — just skip this tweet and let the next tick retry
         return false;
       }
       if (result.status === 429) {
