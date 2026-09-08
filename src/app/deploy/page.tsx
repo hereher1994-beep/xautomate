@@ -93,7 +93,7 @@ echo "✅ File limits increased" echo"" echo"━━━━━━━━━━━�
   {
     id: 'deploy',
     title: '② Deploy Next.js App',
-    description: 'Clones your repo, installs deps, builds Next.js, writes .env.local with your real Supabase keys (auto-read from .env in the repo), starts with PM2.',
+    description: 'Clones your repo, installs deps, builds Next.js, writes .env.local with ALL keys auto-read from the .env in the repo. Zero edits needed — paste and run.',
     filename: '2-deploy-app.sh',
     content: `#!/bin/bash
 # ============================================================
@@ -129,21 +129,37 @@ echo "🔨 Building Next.js..."
 npm run build
 echo "✅ Build complete"
 
-# Write .env.local — reads keys from the .env file that came with the repo
+# Write .env.local — reads ALL keys from the .env file that came with the repo
 echo "📝 Writing .env.local..."
-SUPABASE_URL=$(grep "^NEXT_PUBLIC_SUPABASE_URL=" .env 2>/dev/null | cut -d'=' -f2- | tr -d '\\r' || echo "")
-SUPABASE_ANON=$(grep "^NEXT_PUBLIC_SUPABASE_ANON_KEY=" .env 2>/dev/null | cut -d'=' -f2- | tr -d '\\r' || echo "")
-GEMINI_KEY=$(grep "^GEMINI_API_KEY=" .env 2>/dev/null | cut -d'=' -f2- | tr -d '\\r' || echo "")
+read_env() { grep "^$1=" .env 2>/dev/null | cut -d'=' -f2- | tr -d '\\r' || echo ""; }
+
+SUPABASE_URL=$(read_env "NEXT_PUBLIC_SUPABASE_URL")
+SUPABASE_ANON=$(read_env "NEXT_PUBLIC_SUPABASE_ANON_KEY")
+SUPABASE_SERVICE=$(read_env "SUPABASE_SERVICE_ROLE_KEY")
+GEMINI_KEY=$(read_env "GEMINI_API_KEY")
+OPENAI_KEY=$(read_env "OPENAI_API_KEY")
+ANTHROPIC_KEY=$(read_env "ANTHROPIC_API_KEY")
+PERPLEXITY_KEY=$(read_env "PERPLEXITY_API_KEY")
+STRIPE_KEY=$(read_env "NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY")
+GA_ID=$(read_env "NEXT_PUBLIC_GA_MEASUREMENT_ID")
+ADSENSE_ID=$(read_env "NEXT_PUBLIC_ADSENSE_ID")
 
 cat > .env.local << ENVEOF
 NEXT_PUBLIC_SUPABASE_URL=\${SUPABASE_URL}
 NEXT_PUBLIC_SUPABASE_ANON_KEY=\${SUPABASE_ANON}
-SUPABASE_SERVICE_ROLE_KEY=
+SUPABASE_SERVICE_ROLE_KEY=\${SUPABASE_SERVICE}
 GEMINI_API_KEY=\${GEMINI_KEY}
+OPENAI_API_KEY=\${OPENAI_KEY}
+ANTHROPIC_API_KEY=\${ANTHROPIC_KEY}
+PERPLEXITY_API_KEY=\${PERPLEXITY_KEY}
+NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=\${STRIPE_KEY}
+NEXT_PUBLIC_GA_MEASUREMENT_ID=\${GA_ID}
+NEXT_PUBLIC_ADSENSE_ID=\${ADSENSE_ID}
 NEXT_PUBLIC_SITE_URL=http://167.233.122.88:3000
 ENVEOF
 
-echo "✅ .env.local written" echo"" echo"⚠️  SUPABASE_SERVICE_ROLE_KEY is blank — add it if needed:" echo"   nano /opt/xautomate/.env.local"
+echo "✅ .env.local written — all keys copied from .env" echo"" echo"📋 Contents of .env.local:"
+cat .env.local
 
 # Start with PM2
 pm2 delete xautomate 2>/dev/null || true
@@ -277,35 +293,52 @@ async function humanType(page, selector, text) {
   }
 }
 
+async function injectCookies(page, account, log) {
+  log('info', 'Injecting session cookies into browser...');
+  let cookies;
+  try {
+    cookies = typeof account.cookies === 'string'
+      ? JSON.parse(account.cookies)
+      : account.cookies;
+  } catch (e) {
+    throw new Error('Invalid cookies JSON in accounts.json: ' + e.message);
+  }
+  if (!Array.isArray(cookies) || !cookies.length) {
+    throw new Error('cookies array is empty for account: ' + account.name);
+  }
+  const hasAuthToken = cookies.some(c => c.name === 'auth_token');
+  const hasCt0 = cookies.some(c => c.name === 'ct0');
+  if (!hasAuthToken || !hasCt0) {
+    throw new Error('cookies must contain both auth_token and ct0 for account: ' + account.name);
+  }
+  // Normalise domain
+  const normalised = cookies.map(c => ({
+    ...c,
+    domain: c.domain || '.twitter.com',
+    path: c.path || '/',
+    httpOnly: c.httpOnly !== undefined ? c.httpOnly : false,
+    secure: c.secure !== undefined ? c.secure : true,
+    sameSite: c.sameSite || 'None',
+  }));
+  await page.setCookie(...normalised);
+  log('info', \`✅ \${normalised.length} cookies injected (auth_token + ct0 present)\`);
+}
+
 async function loginToX(page, account, log) {
-  log('info', 'Navigating to X.com login...');
-  await page.goto('https://x.com/i/flow/login', { waitUntil: 'networkidle2', timeout: 60000 });
+  log('info', 'Navigating to X.com home (cookie auth)...');
+  await injectCookies(page, account, log);
+  await page.goto('https://x.com/home', { waitUntil: 'networkidle2', timeout: 60000 });
   await sleep(2000 + Math.random() * 1500);
 
-  log('info', 'Entering username...');
-  await page.waitForSelector('input[autoComplete="username"]', { timeout: 30000 });
-  await humanType(page, 'input[autoComplete="username"]', account.username);
-  await sleep(600 + Math.random() * 400);
-  await page.keyboard.press('Enter');
-  await sleep(2500 + Math.random() * 1000);
-
-  const unusualInput = await page.$('input[data-testid="ocfEnterTextTextInput"]').catch(() => null);
-  if (unusualInput) {
-    log('warn', 'Unusual activity check — entering username again...');
-    await humanType(page, 'input[data-testid="ocfEnterTextTextInput"]', account.username);
-    await page.keyboard.press('Enter');
-    await sleep(2500);
+  // Verify we are logged in — if redirected to login page, cookies are invalid
+  const url = page.url();
+  if (url.includes('/login') || url.includes('/i/flow/login')) {
+    throw new Error('Cookie auth failed — redirected to login. Refresh your auth_token and ct0 cookies.');
   }
-
-  log('info', 'Entering password...');
-  await page.waitForSelector('input[name="password"]', { timeout: 30000 });
-  await humanType(page, 'input[name="password"]', account.password);
-  await sleep(600 + Math.random() * 400);
-  await page.keyboard.press('Enter');
 
   log('info', 'Waiting for home feed...');
   await page.waitForSelector('[data-testid="tweetTextarea_0"]', { timeout: 60000 });
-  log('info', '✅ Logged in successfully!');
+  log('info', '✅ Logged in via cookies successfully!');
   await sleep(2000 + Math.random() * 1000);
 }
 
@@ -513,7 +546,7 @@ echo "✅ bot.js written to /opt/xautomate/bot.js" echo"" echo"Next: bash 4-setu
   {
     id: 'accounts',
     title: '④ Setup Accounts',
-    description: 'Creates accounts.json template and image folders for up to 30 accounts. Edit the file to add your X usernames and passwords.',
+    description: 'Creates accounts.json template and image folders for up to 30 accounts. Edit the file to paste your X session cookies (auth_token + ct0) exported from Cookie-Editor.',
     filename: '4-setup-accounts.sh',
     content: `#!/bin/bash
 # ============================================================
@@ -538,8 +571,7 @@ cat > /opt/xautomate/accounts.json << 'EOF'
 [
   {
     "name": "account1",
-    "username": "YOUR_TWITTER_USERNAME_1",
-    "password": "YOUR_TWITTER_PASSWORD_1",
+    "cookies": "[{\"name\":\"auth_token\",\"value\":\"PASTE_YOUR_AUTH_TOKEN_HERE\",\"domain\":\".twitter.com\",\"path\":\"/\",\"secure\":true,\"httpOnly\":true,\"sameSite\":\"None\"},{\"name\":\"ct0\",\"value\":\"PASTE_YOUR_CT0_HERE\",\"domain\":\".twitter.com\",\"path\":\"/\",\"secure\":true,\"httpOnly\":false,\"sameSite\":\"Lax\"}]",
     "proxy": "",
     "imagesDir": "/opt/xautomate/images/account1",
     "usernames": [
@@ -557,8 +589,7 @@ cat > /opt/xautomate/accounts.json << 'EOF'
   },
   {
     "name": "account2",
-    "username": "YOUR_TWITTER_USERNAME_2",
-    "password": "YOUR_TWITTER_PASSWORD_2",
+    "cookies": "[{\"name\":\"auth_token\",\"value\":\"PASTE_YOUR_AUTH_TOKEN_HERE\",\"domain\":\".twitter.com\",\"path\":\"/\",\"secure\":true,\"httpOnly\":true,\"sameSite\":\"None\"},{\"name\":\"ct0\",\"value\":\"PASTE_YOUR_CT0_HERE\",\"domain\":\".twitter.com\",\"path\":\"/\",\"secure\":true,\"httpOnly\":false,\"sameSite\":\"Lax\"}]",
     "proxy": "",
     "imagesDir": "/opt/xautomate/images/account2",
     "usernames": [
@@ -576,7 +607,7 @@ cat > /opt/xautomate/accounts.json << 'EOF'
 ]
 EOF
 
-echo "✅ accounts.json created at /opt/xautomate/accounts.json" echo"" echo"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" echo"  ⚠️  NOW EDIT accounts.json with your real credentials:" echo"  nano /opt/xautomate/accounts.json" echo"" echo"  To add more accounts: copy the block and change" echo"  name/username/password/proxy/imagesDir for each one." echo"  Up to 30 accounts — all run independently." echo"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"`,
+echo "✅ accounts.json created at /opt/xautomate/accounts.json" echo"" echo"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" echo"  ⚠️  NOW EDIT accounts.json with your real cookies:" echo"  nano /opt/xautomate/accounts.json" echo"" echo"  For each account replace PASTE_YOUR_AUTH_TOKEN_HERE" echo"  and PASTE_YOUR_CT0_HERE with values from Cookie-Editor." echo"  To add more accounts: copy the block and change" echo"  name/cookies/proxy/imagesDir for each one." echo"  Up to 30 accounts — all run independently." echo"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"`,
   },
   {
     id: 'pm2',
@@ -602,7 +633,7 @@ if [ ! -f /opt/xautomate/accounts.json ]; then
 fi
 
 # Check credentials are filled in
-if grep -q "YOUR_TWITTER_USERNAME" /opt/xautomate/accounts.json; then echo"⚠️  accounts.json still has placeholder credentials!" echo"   Edit it first: nano /opt/xautomate/accounts.json"
+if grep -q "PASTE_YOUR_AUTH_TOKEN_HERE" /opt/xautomate/accounts.json; then echo"⚠️  accounts.json still has placeholder cookies!" echo"   Edit it first: nano /opt/xautomate/accounts.json" echo"   Paste your real auth_token and ct0 values from Cookie-Editor"
   exit 1
 fi
 
@@ -798,10 +829,10 @@ export default function DeployPage() {
               <ol className="space-y-2">
                 {[
                   { n: '1', cmd: 'bash 1-setup-server.sh', note: 'Run ONCE on fresh VPS — installs everything' },
-                  { n: '2', cmd: 'bash 2-deploy-app.sh', note: 'Paste as-is — repo URL pre-filled, auto-fills Supabase keys from .env' },
+                  { n: '2', cmd: 'bash 2-deploy-app.sh', note: 'Paste as-is — all env vars auto-read from .env, zero edits needed' },
                   { n: '3', cmd: 'bash 3-install-bot.sh', note: 'Writes the full Puppeteer bot engine' },
                   { n: '4', cmd: 'bash 4-setup-accounts.sh', note: 'Creates accounts.json template' },
-                  { n: '5', cmd: 'nano /opt/xautomate/accounts.json', note: 'Fill in your X usernames + passwords' },
+                  { n: '5', cmd: 'nano /opt/xautomate/accounts.json', note: 'Paste your auth_token + ct0 cookies from Cookie-Editor' },
                   { n: '6', cmd: 'bash 5-start-bot-pm2.sh', note: 'All accounts start running 24/7' },
                   { n: '7', cmd: 'pm2 logs xautomate-bot', note: 'Watch all accounts work in parallel' },
                 ].map(step => (
@@ -827,9 +858,8 @@ export default function DeployPage() {
         <div className="mb-5 rounded-xl border border-yellow-500/20 bg-yellow-500/5 px-4 py-3 flex gap-2">
           <AlertTriangle size={14} className="text-yellow-400 flex-shrink-0 mt-0.5" />
           <p className="text-xs text-yellow-300">
-            <strong>Script ② (Deploy App)</strong> uses repo <code className="bg-black/30 px-1 rounded">github.com/hereher1994-beep/xautomate</code> — pre-filled, no editing needed.
-            It also auto-reads your Supabase URL and Anon Key from the <code className="bg-black/30 px-1 rounded">.env</code> file in your repo.
-            Only <strong>SUPABASE_SERVICE_ROLE_KEY</strong> needs to be added manually if you use it.
+            <strong>Script ② (Deploy App)</strong> is fully pre-filled — repo URL and <strong>all</strong> environment variables (Supabase URL, Anon Key, Service Role Key, Gemini, etc.) are auto-read from the <code className="bg-black/30 px-1 rounded">.env</code> file that ships with your repo. <strong>Zero edits needed — paste and run.</strong>
+            <br /><strong>Script ④ (Setup Accounts)</strong> uses <strong>session cookies only</strong> — no username/password. Export <code className="bg-black/30 px-1 rounded">auth_token</code> + <code className="bg-black/30 px-1 rounded">ct0</code> from Cookie-Editor and paste into <code className="bg-black/30 px-1 rounded">accounts.json</code>.
           </p>
         </div>
 
