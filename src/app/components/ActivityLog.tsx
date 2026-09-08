@@ -136,15 +136,11 @@ export default function ActivityLog({ logs, onClear }: ActivityLogProps) {
             <div className="p-2 space-y-0.5">
               {filtered.map(entry => {
                 const style = LEVEL_STYLES[entry.level];
-                const isRetry = entry.message.startsWith('🔄 Retry') || entry.message.startsWith('⚠ Tweet attempt');
                 return (
                   <div
                     key={entry.id}
                     className="flex items-start gap-2 px-2 py-1 rounded log-fade-in"
-                    style={{
-                      backgroundColor: isRetry ? 'rgba(245,158,11,0.08)' : style.bg,
-                      borderLeft: isRetry ? '2px solid rgba(245,158,11,0.5)' : '2px solid transparent',
-                    }}
+                    style={{ backgroundColor: style.bg }}
                   >
                     <span className="font-mono-data text-xs flex-shrink-0"
                       style={{ color: 'var(--muted-foreground)', minWidth: '140px' }}>
@@ -152,7 +148,7 @@ export default function ActivityLog({ logs, onClear }: ActivityLogProps) {
                     </span>
                     <span className="font-mono-data text-xs font-semibold flex-shrink-0"
                       style={{ color: style.color, minWidth: '48px' }}>
-                      {isRetry ? 'RETRY' : style.prefix}
+                      {style.prefix}
                     </span>
                     <span className="font-mono-data text-xs break-all"
                       style={{ color: entry.level === 'info' ? 'var(--foreground)' : style.color }}>

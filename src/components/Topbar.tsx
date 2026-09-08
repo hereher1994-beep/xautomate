@@ -1,7 +1,5 @@
 import React from 'react';
 import AppLogo from '@/components/ui/AppLogo';
-import Link from 'next/link';
-import { Server } from 'lucide-react';
 
 export default function Topbar() {
   return (
@@ -19,14 +17,6 @@ export default function Topbar() {
       </div>
 
       <div className="flex items-center gap-3">
-        <Link
-          href="/deploy"
-          className="hidden sm:flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded transition-all"
-          style={{ color: 'var(--muted-foreground)', border: '1px solid var(--border)' }}
-        >
-          <Server size={12} />
-          Deploy to VPS
-        </Link>
         <span className="text-xs text-muted-foreground font-mono-data hidden md:block">
           Solo Experiment Mode
         </span>
