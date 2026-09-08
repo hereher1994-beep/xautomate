@@ -10,7 +10,7 @@ import UsernameListManager from './UsernameListManager';
 import ImageAttachmentManager from './ImageAttachmentManager';
 import CycleControlCard from './CycleControlCard';
 import ActivityLog from './ActivityLog';
-import type { AutomationStatus, LogEntry } from '../types/automation';
+import type { AutomationStatus, LogEntry, AccountConfig, ImageAttachment } from '../types/automation';
 import { parseCookieJson } from '../types/automation';
 
 const INITIAL_LOG: LogEntry[] = [
@@ -22,21 +22,88 @@ const INITIAL_LOG: LogEntry[] = [
   },
 ];
 
-export default function AutomationControlPanel() {
-  // ── Core config state ──────────────────────────────────────────────
-  const [proxy, setProxy] = useState('');
-  const [cookies, setCookies] = useState('');
-  const [context, setContext] = useState('');
-  const [usernames, setUsernames] = useState<string[]>([
-    'elonmusk',
-    'sama',
-    'karpathy',
-    'naval',
-    'paulg',
-  ]);
-  const [images, setImages] = useState<{ id: string; name: string; url: string; size: number }[]>([]);
-  const [intervalMinutes, setIntervalMinutes] = useState<number>(15);
-  const [usernamesPerTweet, setUsernamesPerTweet] = useState<number>(4);
+interface AutomationControlPanelProps {
+  account?: AccountConfig;
+  onAccountChange?: (updated: AccountConfig) => void;
+}
+
+export default function AutomationControlPanel({ account, onAccountChange }: AutomationControlPanelProps) {
+  // ── Core config state — seeded from account prop if provided ───────
+  const [proxy, setProxyState] = useState(account?.proxy ?? '');
+  const [cookies, setCookiesState] = useState(account?.cookies ?? '');
+  const [context, setContextState] = useState(account?.context ?? '');
+  const [usernames, setUsernamesState] = useState<string[]>(
+    account?.usernames ?? ['elonmusk', 'sama', 'karpathy', 'naval', 'paulg']
+  );
+  const [images, setImagesState] = useState<ImageAttachment[]>(account?.images ?? []);
+  const [intervalMinutes, setIntervalMinutesState] = useState<number>(account?.intervalMinutes ?? 15);
+  const [usernamesPerTweet, setUsernamesPerTweetState] = useState<number>(account?.usernamesPerTweet ?? 4);
+
+  // ── localStorage key (per-account or global) ──────────────────────
+  const lsKey = account ? `xautomate_state_${account.id}` : 'xautomate_state_default';
+
+  // ── Load from localStorage on mount (if no account prop) ──────────
+  useEffect(() => {
+    if (account) return; // account prop takes priority
+    try {
+      const raw = localStorage.getItem(lsKey);
+      if (!raw) return;
+      const saved = JSON.parse(raw);
+      if (saved.proxy !== undefined) setProxyState(saved.proxy);
+      if (saved.cookies !== undefined) setCookiesState(saved.cookies);
+      if (saved.context !== undefined) setContextState(saved.context);
+      if (Array.isArray(saved.usernames)) setUsernamesState(saved.usernames);
+      if (Array.isArray(saved.images)) setImagesState(saved.images);
+      if (typeof saved.intervalMinutes === 'number') setIntervalMinutesState(saved.intervalMinutes);
+      if (typeof saved.usernamesPerTweet === 'number') setUsernamesPerTweetState(saved.usernamesPerTweet);
+    } catch { /* ignore */ }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ── Persist to localStorage + notify parent on every change ───────
+  const persistState = useCallback((patch: Partial<{
+    proxy: string; cookies: string; context: string;
+    usernames: string[]; images: ImageAttachment[];
+    intervalMinutes: number; usernamesPerTweet: number;
+  }>) => {
+    try {
+      const current = (() => {
+        try { return JSON.parse(localStorage.getItem(lsKey) ?? '{}'); } catch { return {}; }
+      })();
+      const merged = { ...current, ...patch };
+      localStorage.setItem(lsKey, JSON.stringify(merged));
+
+      // Also update ct0 inside cookies JSON if it changed
+      if (patch.cookies !== undefined && account) {
+        const updatedAccount: AccountConfig = {
+          ...account,
+          proxy: patch.proxy ?? current.proxy ?? account.proxy,
+          cookies: patch.cookies,
+          context: patch.context ?? current.context ?? account.context,
+          usernames: patch.usernames ?? current.usernames ?? account.usernames,
+          images: patch.images ?? current.images ?? account.images,
+          intervalMinutes: patch.intervalMinutes ?? current.intervalMinutes ?? account.intervalMinutes,
+          usernamesPerTweet: patch.usernamesPerTweet ?? current.usernamesPerTweet ?? account.usernamesPerTweet,
+        };
+        onAccountChange?.(updatedAccount);
+      } else if (account) {
+        const updatedAccount: AccountConfig = {
+          ...account,
+          ...patch,
+        };
+        onAccountChange?.(updatedAccount);
+      }
+    } catch { /* ignore */ }
+  }, [lsKey, account, onAccountChange]);
+
+  // ── Setters that auto-save ─────────────────────────────────────────
+  const setProxy = useCallback((v: string) => { setProxyState(v); persistState({ proxy: v }); }, [persistState]);
+  const setCookies = useCallback((v: string) => { setCookiesState(v); persistState({ cookies: v }); }, [persistState]);
+  const setContext = useCallback((v: string) => { setContextState(v); persistState({ context: v }); }, [persistState]);
+  const setUsernames = useCallback((v: string[]) => { setUsernamesState(v); persistState({ usernames: v }); }, [persistState]);
+  const setImages = useCallback((v: ImageAttachment[]) => { setImagesState(v); persistState({ images: v }); }, [persistState]);
+  const setIntervalMinutes = useCallback((v: number) => { setIntervalMinutesState(v); persistState({ intervalMinutes: v }); }, [persistState]);
+  const setUsernamesPerTweet = useCallback((v: number) => { setUsernamesPerTweetState(v); persistState({ usernamesPerTweet: v }); }, [persistState]);
 
   // ── Run state ──────────────────────────────────────────────────────
   const [status, setStatus] = useState<AutomationStatus>('idle');
@@ -73,6 +140,21 @@ export default function AutomationControlPanel() {
     setLogs(prev => [{ id, timestamp, level, message }, ...prev].slice(0, 200));
   }, []);
 
+  // ── ct0 rotation: update cookies JSON with new ct0 value ──────────
+  const rotateCt0 = useCallback((newCt0: string) => {
+    const currentCookies = cookiesRef.current;
+    try {
+      const parsed = JSON.parse(currentCookies);
+      if (!Array.isArray(parsed)) return;
+      const updated = parsed.map((c: { name: string; value: string }) =>
+        c.name === 'ct0' ? { ...c, value: newCt0 } : c
+      );
+      const newJson = JSON.stringify(updated, null, 2);
+      setCookies(newJson);
+      addLog('info', `ct0 CSRF token rotated and saved to localStorage.`);
+    } catch { /* ignore */ }
+  }, [setCookies, addLog]);
+
   // ── Fire a real tweet cycle ────────────────────────────────────────
   const fireCycle = useCallback(async () => {
     const newCount = cycleCountRef.current + 1;
@@ -106,7 +188,6 @@ export default function AutomationControlPanel() {
       const randomIdx = Math.floor(Math.random() * currentImages.length);
       const chosenImage = currentImages[randomIdx];
       chosenImageName = chosenImage.name;
-      // Images are stored as base64 data URLs — no fetch needed
       if (chosenImage.url && chosenImage.url.startsWith('data:')) {
         imageDataUrl = chosenImage.url;
         addLog('info', `Cycle #${newCount} — image selected: "${chosenImageName}" (${randomIdx + 1}/${currentImages.length})`);
@@ -115,7 +196,7 @@ export default function AutomationControlPanel() {
       }
     }
 
-    // ── Step 4: Pick 4 random usernames and build mention suffix ──────
+    // ── Step 4: Pick N random usernames and build mention suffix ──────
     const pickCount = Math.min(currentUsernamesPerTweet, currentUsernames.length);
     const shuffled = [...currentUsernames].sort(() => Math.random() - 0.5);
     const pickedUsernames = pickCount > 0 ? shuffled.slice(0, pickCount) : [];
@@ -160,6 +241,11 @@ export default function AutomationControlPanel() {
         const mediaNote = data.mediaId ? ` + image "${chosenImageName}"` : '';
         const usersNote = pickedUsernames.length > 0 ? ` — tagged: ${pickedUsernames.map(u => `@${u}`).join(', ')}` : '';
         addLog('success', `✓ Tweet sent${mediaNote}${tweetId ? ` (ID: ${tweetId})` : ''}${usersNote}`);
+
+        // ── ct0 rotation: save new token if X rotated it ──────────────
+        if (data.newCt0 && typeof data.newCt0 === 'string' && data.newCt0 !== ct0) {
+          rotateCt0(data.newCt0);
+        }
       } else {
         const errMsg = (data.error as string) ?? `HTTP ${res.status}`;
         addLog('error', `✗ Tweet failed: ${errMsg}`);
@@ -181,11 +267,10 @@ export default function AutomationControlPanel() {
     if (newCount % 3 === 0) {
       addLog('warn', `Rate-limit buffer applied after cycle #${newCount}.`);
     }
-  }, [addLog]);
+  }, [addLog, rotateCt0]);
 
   // ── Test Tweet — fire one tweet immediately to validate config ─────
   const handleTestTweet = useCallback(async () => {
-    // Read directly from refs so we always get the latest values regardless of React batching
     const currentCookies = cookiesRef.current;
     const currentContext = contextRef.current;
 
@@ -233,7 +318,6 @@ export default function AutomationControlPanel() {
       return;
     }
 
-    // Parse the cookie JSON before starting
     const parsed = parseCookieJson(cookies);
     if (parsed.count === 0) {
       toast.error('Invalid cookie format', { description: 'Could not parse any cookies. Paste the JSON array from Cookie-Editor → Export → JSON.' });
@@ -256,7 +340,6 @@ export default function AutomationControlPanel() {
       addLog('warn', 'No proxy set — using direct connection. Consider adding a proxy for safety.');
     }
 
-    // Log parsed cookie summary (never log actual values for security)
     const authFields = [
       parsed.hasAuthToken && 'auth_token',
       parsed.hasCt0 && 'ct0',
@@ -275,23 +358,20 @@ export default function AutomationControlPanel() {
       description: `Cycling every ${intervalMinutes} minute${intervalMinutes !== 1 ? 's' : ''} — tagging ${usernamesPerTweet} username${usernamesPerTweet !== 1 ? 's' : ''} per tweet.`,
     });
 
-    // Fire first cycle immediately
     fireCycle();
 
-    // Set up interval for subsequent cycles
     intervalRef.current = setInterval(() => {
       fireCycle();
       setNextCycleIn(intervalMinutes * 60);
     }, intervalMinutes * 60 * 1000);
 
-    // Countdown timer
     countdownRef.current = setInterval(() => {
       setNextCycleIn(prev => {
         if (prev === null || prev <= 1) return intervalMinutes * 60;
         return prev - 1;
       });
     }, 1000);
-  }, [cookies, usernames, context, proxy, intervalMinutes, addLog, fireCycle]);
+  }, [cookies, usernames, context, proxy, intervalMinutes, usernamesPerTweet, addLog, fireCycle]);
 
   // ── Stop automation ────────────────────────────────────────────────
   const handleStop = useCallback(() => {
@@ -360,6 +440,15 @@ export default function AutomationControlPanel() {
       />
 
       <div className="max-w-screen-2xl mx-auto px-4 sm:px-6 lg:px-8 xl:px-10 2xl:px-12 py-6">
+
+        {/* Account label if in multi-account mode */}
+        {account && (
+          <div className="mb-4 flex items-center gap-2">
+            <span className="text-xs text-muted-foreground font-mono-data">Account:</span>
+            <span className="text-sm font-semibold text-foreground">{account.name}</span>
+            <span className="font-mono-data text-xs text-muted-foreground">({account.id})</span>
+          </div>
+        )}
 
         {/* Status Bar */}
         <StatusBar

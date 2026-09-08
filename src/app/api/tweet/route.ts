@@ -54,7 +54,7 @@ interface TweetRequestBody {
   cookieString: string;
   ct0: string;
   tweetText: string;
-  imageDataUrl?: string; // optional base64 data URL of the chosen image
+  imageDataUrl?: string;
 }
 
 /**
@@ -67,13 +67,11 @@ async function uploadMedia(
   imageDataUrl: string
 ): Promise<string | null> {
   try {
-    // Strip the data URL prefix to get raw base64
     const base64Match = imageDataUrl.match(/^data:([^;]+);base64,(.+)$/);
     if (!base64Match) return null;
     const mimeType = base64Match[1];
     const base64Data = base64Match[2];
 
-    // Decode base64 to binary
     const binaryStr = atob(base64Data);
     const bytes = new Uint8Array(binaryStr.length);
     for (let i = 0; i < binaryStr.length; i++) {
@@ -115,14 +113,13 @@ async function tryCreateTweet(
   ct0: string,
   tweetText: string,
   mediaId?: string
-): Promise<{ ok: boolean; status: number; body: unknown }> {
+): Promise<{ ok: boolean; status: number; body: unknown; newCt0?: string }> {
   const variables: Record<string, unknown> = {
     tweet_text: tweetText,
     dark_request: false,
     semantic_annotation_ids: [],
   };
 
-  // Attach media if we have a media ID
   if (mediaId) {
     variables.media = {
       media_entities: [{ media_id: mediaId, tagged_users: [] }],
@@ -157,6 +154,16 @@ async function tryCreateTweet(
     }),
   });
 
+  // Capture rotated ct0 from response Set-Cookie header if present
+  let newCt0: string | undefined;
+  const setCookieHeader = res.headers.get('set-cookie');
+  if (setCookieHeader) {
+    const ct0Match = setCookieHeader.match(/(?:^|,\s*)ct0=([^;,]+)/i);
+    if (ct0Match) {
+      newCt0 = ct0Match[1];
+    }
+  }
+
   let body: unknown;
   try {
     body = await res.json();
@@ -164,7 +171,7 @@ async function tryCreateTweet(
     body = await res.text().catch(() => '(no body)');
   }
 
-  return { ok: res.ok, status: res.status, body };
+  return { ok: res.ok, status: res.status, body, newCt0 };
 }
 
 export async function POST(req: NextRequest) {
@@ -214,6 +221,8 @@ export async function POST(req: NextRequest) {
           success: true,
           queryId,
           mediaId: mediaId ?? null,
+          // Return the new ct0 if X rotated it, so the client can save it back
+          newCt0: result.newCt0 ?? null,
           data: result.body,
         });
       }
