@@ -14,6 +14,18 @@ export interface ImageAttachment {
   size: number;
 }
 
+export interface AccountConfig {
+  id: string;
+  name: string;
+  proxy: string;
+  cookies: string;
+  context: string;
+  usernames: string[];
+  images: ImageAttachment[];
+  intervalMinutes: number;
+  usernamesPerTweet: number;
+}
+
 export interface ParsedCookies {
   /** Key-value map of all parsed cookie pairs */
   pairs: Record<string, string>;
@@ -70,14 +82,6 @@ export function parseCookieJson(raw: string): ParsedCookies {
 
 /**
  * Parses a Cookie-Editor "Header String" export into structured cookie data.
- *
- * Handles:
- *  - Semicolon-separated name=value pairs
- *  - Values containing = signs (e.g. base64, JSON)
- *  - URL-encoded values (e.g. guest_id=v1%3A...)
- *  - Quoted values (e.g. personalization_id="v1_...")
- *  - JSON-valued cookies (e.g. g_state={"i_l":2,...})
- *  - Leading/trailing whitespace around names and values
  */
 export function parseCookieString(raw: string): ParsedCookies {
   const pairs: Record<string, string> = {};
@@ -86,19 +90,14 @@ export function parseCookieString(raw: string): ParsedCookies {
     return { pairs, headerString: '', count: 0, hasAuthToken: false, hasCt0: false, hasTwid: false };
   }
 
-  // Split on semicolons, but be careful: values can contain semicolons inside
-  // JSON objects like g_state={"i_l":2,"i_ll":...}
-  // Strategy: split on "; " or ";" only when followed by a word-char (cookie name start)
   const segments = raw.split(/;\s*(?=[a-zA-Z_])/);
 
   for (const segment of segments) {
     const trimmed = segment.trim();
     if (!trimmed) continue;
 
-    // Find the first = sign — everything before is the name, everything after is the value
     const eqIdx = trimmed.indexOf('=');
     if (eqIdx === -1) {
-      // Cookie with no value (flag cookie) — store as empty string
       pairs[trimmed] = '';
       continue;
     }
@@ -111,7 +110,6 @@ export function parseCookieString(raw: string): ParsedCookies {
     }
   }
 
-  // Rebuild a clean header string from parsed pairs
   const headerString = Object.entries(pairs)
     .map(([k, v]) => (v ? `${k}=${v}` : k))
     .join('; ');
@@ -124,4 +122,51 @@ export function parseCookieString(raw: string): ParsedCookies {
     hasCt0: 'ct0' in pairs,
     hasTwid: 'twid' in pairs,
   };
+}
+
+/** Default account config factory */
+export function createDefaultAccount(id: string, name: string): AccountConfig {
+  return {
+    id,
+    name,
+    proxy: '',
+    cookies: '',
+    context: '',
+    usernames: ['elonmusk', 'sama', 'karpathy', 'naval', 'paulg'],
+    images: [],
+    intervalMinutes: 15,
+    usernamesPerTweet: 4,
+  };
+}
+
+/** localStorage key helpers */
+export const LS_ACCOUNTS_KEY = 'xautomate_accounts';
+export const LS_ACTIVE_ACCOUNT_KEY = 'xautomate_active_account';
+
+export function loadAccountsFromStorage(): AccountConfig[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = localStorage.getItem(LS_ACCOUNTS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed) && parsed.length > 0) return parsed as AccountConfig[];
+  } catch { /* ignore */ }
+  return [];
+}
+
+export function saveAccountsToStorage(accounts: AccountConfig[]): void {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(LS_ACCOUNTS_KEY, JSON.stringify(accounts));
+  } catch { /* ignore */ }
+}
+
+export function loadActiveAccountId(): string | null {
+  if (typeof window === 'undefined') return null;
+  return localStorage.getItem(LS_ACTIVE_ACCOUNT_KEY);
+}
+
+export function saveActiveAccountId(id: string): void {
+  if (typeof window === 'undefined') return;
+  localStorage.setItem(LS_ACTIVE_ACCOUNT_KEY, id);
 }

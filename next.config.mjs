@@ -18,35 +18,9 @@ const nextConfig = {
   webpack(
     config,
     {
-      dev: dev,
-      isServer
+      dev: dev
     }
   ) {
-    // Prevent puppeteer and its heavy deps from being bundled into client chunks
-    // This fixes "Cannot find module './611.js'" and similar chunk errors
-    if (!isServer) {
-      config.resolve = config.resolve || {};
-      config.resolve.fallback = {
-        ...(config.resolve.fallback || {}),
-        fs: false,
-        net: false,
-        tls: false,
-        child_process: false,
-        'puppeteer': false,
-        'puppeteer-core': false,
-      };
-    }
-
-    if (isServer) {
-      // Keep puppeteer as external on server side — don't bundle it
-      const existingExternals = config.externals || [];
-      config.externals = [
-        ...(Array.isArray(existingExternals) ? existingExternals : [existingExternals]),
-        'puppeteer',
-        'puppeteer-core',
-      ];
-    }
-
     if (dev) {
       config.module.rules.push({
         test: /\.(jsx|tsx)$/,

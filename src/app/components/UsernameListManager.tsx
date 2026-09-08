@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useRef, useCallback, useEffect } from 'react';
+import React, { useState, useRef, useCallback } from 'react';
 import { Users, Plus, Trash2, Upload, ClipboardPaste, X, Search, AlertCircle } from 'lucide-react';
 import { toast } from 'sonner';
 import type { LogEntry } from '../types/automation';
@@ -35,9 +35,6 @@ export default function UsernameListManager({
   const [search, setSearch] = useState('');
   const [dragOver, setDragOver] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
-
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => { setMounted(true); }, []);
 
   const filtered = search.trim()
     ? usernames.filter(u => u.toLowerCase().includes(search.toLowerCase()))
@@ -128,7 +125,7 @@ export default function UsernameListManager({
           <span className="text-sm font-semibold text-foreground">Target Usernames</span>
           <span className="font-mono-data text-xs px-1.5 py-0.5 rounded"
             style={{ backgroundColor: 'rgba(0,212,170,0.08)', color: 'var(--primary)', border: '1px solid rgba(0,212,170,0.15)' }}>
-            {mounted ? usernames.length : 0}
+            {usernames.length}
           </span>
         </div>
         <div className="flex items-center gap-1.5">
@@ -239,7 +236,7 @@ export default function UsernameListManager({
       </div>
 
       {/* Search + list */}
-      {mounted && usernames.length > 0 && (
+      {usernames.length > 0 && (
         <>
           <div className="flex items-center gap-2 mb-2">
             <div className="relative flex-1">
@@ -303,7 +300,7 @@ export default function UsernameListManager({
         </>
       )}
 
-      {mounted && usernames.length === 0 && (
+      {usernames.length === 0 && (
         <div className="flex flex-col items-center justify-center py-6 text-center">
           <AlertCircle size={20} className="text-muted-foreground mb-2" />
           <p className="text-sm font-medium text-foreground mb-1">No target usernames</p>

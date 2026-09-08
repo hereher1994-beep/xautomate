@@ -1,29 +1,38 @@
 'use client';
 
 import React, { useState } from 'react';
-import { Timer, Play, Square, Pause, RotateCcw, FlaskConical, Info } from 'lucide-react';
+import { Timer, Play, Square, Pause, RotateCcw, ChevronUp, ChevronDown, AlertTriangle, FlaskConical } from 'lucide-react';
 import type { AutomationStatus } from '../types/automation';
 
 interface CycleControlCardProps {
+  intervalMinutes: number;
+  onIntervalChange: (v: number) => void;
+  usernamesPerTweet: number;
+  onUsernamesPerTweetChange: (v: number) => void;
   totalUsernames: number;
   status: AutomationStatus;
   isStarting: boolean;
   isTesting?: boolean;
   cycleCount: number;
-  tweetsPosted: number;
   onStart: () => void;
   onStop: () => void;
   onPause: () => void;
   onTestTweet: () => void;
 }
 
+const PRESET_INTERVALS = [5, 10, 15, 30, 60, 120];
+const PRESET_USERNAMES_PER_TWEET = [4, 8, 12, 16];
+
 export default function CycleControlCard({
+  intervalMinutes,
+  onIntervalChange,
+  usernamesPerTweet,
+  onUsernamesPerTweetChange,
   totalUsernames,
   status,
   isStarting,
   isTesting = false,
   cycleCount,
-  tweetsPosted,
   onStart,
   onStop,
   onPause,
@@ -45,6 +54,22 @@ export default function CycleControlCard({
     onStop();
   };
 
+  const increment = () => onIntervalChange(Math.min(intervalMinutes + 1, 1440));
+  const decrement = () => onIntervalChange(Math.max(intervalMinutes - 1, 1));
+
+  const incrementUpt = () => onUsernamesPerTweetChange(Math.min(usernamesPerTweet + 1, Math.max(totalUsernames, 1)));
+  const decrementUpt = () => onUsernamesPerTweetChange(Math.max(usernamesPerTweet - 1, 1));
+
+  const handleIntervalInput = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const v = parseInt(e.target.value, 10);
+    if (!isNaN(v) && v >= 1 && v <= 1440) onIntervalChange(v);
+  };
+
+  const handleUptInput = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const v = parseInt(e.target.value, 10);
+    if (!isNaN(v) && v >= 1) onUsernamesPerTweetChange(v);
+  };
+
   return (
     <div className="config-card">
       <div className="flex items-center gap-2 mb-4">
@@ -52,49 +77,154 @@ export default function CycleControlCard({
         <span className="text-sm font-semibold text-foreground">Cycle Control</span>
       </div>
 
-      {/* Cycle pattern info */}
-      <div className="mb-4 rounded-lg p-3" style={{ backgroundColor: 'var(--input)', border: '1px solid var(--border)' }}>
-        <div className="flex items-center gap-1.5 mb-2">
-          <Info size={12} className="text-primary flex-shrink-0" />
-          <span className="text-xs font-semibold text-foreground">Automated Cycle Pattern</span>
+      {/* Interval input */}
+      <label className="config-label">Cycle Interval</label>
+      <p className="text-xs text-muted-foreground mb-2">
+        Time between each automation cycle. Minimum 1 minute, maximum 24 hours (1440 min).
+      </p>
+
+      <div className="flex items-center gap-3 mb-3">
+        <div className="flex items-center rounded overflow-hidden"
+          style={{ border: '1px solid var(--border)', backgroundColor: 'var(--input)' }}>
+          <button
+            type="button"
+            className="px-2.5 py-2 text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+            onClick={decrement}
+            disabled={intervalMinutes <= 1 || isActive}
+            aria-label="Decrease interval"
+          >
+            <ChevronDown size={14} />
+          </button>
+          <input
+            type="number"
+            className="font-mono-data text-sm font-semibold text-center bg-transparent text-foreground outline-none"
+            style={{ width: '56px', border: 'none' }}
+            value={intervalMinutes}
+            onChange={handleIntervalInput}
+            min={1}
+            max={1440}
+            disabled={isActive}
+          />
+          <span className="text-xs text-muted-foreground pr-2">min</span>
+          <button
+            type="button"
+            className="px-2.5 py-2 text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+            onClick={increment}
+            disabled={intervalMinutes >= 1440 || isActive}
+            aria-label="Increase interval"
+          >
+            <ChevronUp size={14} />
+          </button>
         </div>
-        <div className="space-y-1.5 text-xs text-muted-foreground">
-          <div className="flex items-start gap-2">
-            <span className="font-mono-data text-primary font-bold mt-0.5">①</span>
-            <span><strong className="text-foreground">10 posts</strong> — random 1–3 min gaps · context + random 3–6 usernames + random image</span>
-          </div>
-          <div className="flex items-start gap-2">
-            <span className="font-mono-data text-primary font-bold mt-0.5">②</span>
-            <span><strong className="text-foreground">3 photo-only posts</strong> — image only, no text, no usernames (anti-spam buffer)</span>
-          </div>
-          <div className="flex items-start gap-2">
-            <span className="font-mono-data text-accent font-bold mt-0.5">③</span>
-            <span><strong className="text-foreground">Rest 3 minutes</strong></span>
-          </div>
-          <div className="flex items-start gap-2">
-            <span className="font-mono-data text-primary font-bold mt-0.5">④</span>
-            <span><strong className="text-foreground">20 posts</strong> — random 1–3 min gaps · context + random 3–6 usernames + random image</span>
-          </div>
-          <div className="flex items-start gap-2">
-            <span className="font-mono-data text-accent font-bold mt-0.5">⑤</span>
-            <span><strong className="text-foreground">Rest 10 minutes</strong> → repeat from ①</span>
-          </div>
-          <div className="flex items-start gap-2 mt-2 pt-2" style={{ borderTop: '1px solid var(--border)' }}>
-            <span className="font-mono-data text-emerald-400 font-bold mt-0.5">★</span>
-            <span>Runs until <strong className="text-foreground">entire username list is exhausted</strong> · 3–6 random usernames per tweet</span>
-          </div>
+
+        <div className="flex flex-wrap gap-1.5">
+          {PRESET_INTERVALS.map(p => (
+            <button
+              key={`preset-${p}`}
+              type="button"
+              className="font-mono-data text-xs px-2 py-1 rounded transition-all"
+              style={{
+                backgroundColor: intervalMinutes === p ? 'var(--primary)' : 'var(--input)',
+                color: intervalMinutes === p ? 'var(--primary-foreground)' : 'var(--muted-foreground)',
+                border: `1px solid ${intervalMinutes === p ? 'var(--primary)' : 'var(--border)'}`,
+              }}
+              onClick={() => !isActive && onIntervalChange(p)}
+              disabled={isActive}
+            >
+              {p >= 60 ? `${p / 60}h` : `${p}m`}
+            </button>
+          ))}
         </div>
       </div>
 
+      {intervalMinutes < 5 && (
+        <div className="mb-3 flex items-start gap-1.5 p-2 rounded"
+          style={{ backgroundColor: 'rgba(245,158,11,0.07)', border: '1px solid rgba(245,158,11,0.2)' }}>
+          <AlertTriangle size={12} className="text-accent mt-0.5 flex-shrink-0" />
+          <p className="text-xs" style={{ color: 'var(--accent)' }}>
+            Very short intervals ({intervalMinutes}m) may trigger rate limiting. 10–30 minutes is recommended.
+          </p>
+        </div>
+      )}
+
+      {/* Usernames per tweet */}
+      <label className="config-label mt-1">Usernames Tagged per Tweet</label>
+      <p className="text-xs text-muted-foreground mb-2">
+        Bot randomly picks this many usernames from your list and appends them at the end of each tweet.
+      </p>
+      <div className="flex items-center gap-3 mb-3">
+        <div className="flex items-center rounded overflow-hidden"
+          style={{ border: '1px solid var(--border)', backgroundColor: 'var(--input)' }}>
+          <button
+            type="button"
+            className="px-2.5 py-2 text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+            onClick={decrementUpt}
+            disabled={usernamesPerTweet <= 1 || isActive}
+            aria-label="Decrease usernames per tweet"
+          >
+            <ChevronDown size={14} />
+          </button>
+          <input
+            type="number"
+            className="font-mono-data text-sm font-semibold text-center bg-transparent text-foreground outline-none"
+            style={{ width: '48px', border: 'none' }}
+            value={usernamesPerTweet}
+            onChange={handleUptInput}
+            min={1}
+            disabled={isActive}
+          />
+          <button
+            type="button"
+            className="px-2.5 py-2 text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+            onClick={incrementUpt}
+            disabled={isActive}
+            aria-label="Increase usernames per tweet"
+          >
+            <ChevronUp size={14} />
+          </button>
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          {PRESET_USERNAMES_PER_TWEET.map(p => (
+            <button
+              key={`upt-${p}`}
+              type="button"
+              className="font-mono-data text-xs px-2 py-1 rounded transition-all"
+              style={{
+                backgroundColor: usernamesPerTweet === p ? 'var(--primary)' : 'var(--input)',
+                color: usernamesPerTweet === p ? 'var(--primary-foreground)' : 'var(--muted-foreground)',
+                border: `1px solid ${usernamesPerTweet === p ? 'var(--primary)' : 'var(--border)'}`,
+              }}
+              onClick={() => !isActive && onUsernamesPerTweetChange(p)}
+              disabled={isActive}
+            >
+              {p}
+            </button>
+          ))}
+        </div>
+      </div>
+      {totalUsernames > 0 && usernamesPerTweet > totalUsernames && (
+        <div className="mb-3 flex items-start gap-1.5 p-2 rounded"
+          style={{ backgroundColor: 'rgba(245,158,11,0.07)', border: '1px solid rgba(245,158,11,0.2)' }}>
+          <AlertTriangle size={12} className="text-accent mt-0.5 flex-shrink-0" />
+          <p className="text-xs" style={{ color: 'var(--accent)' }}>
+            You only have {totalUsernames} username{totalUsernames !== 1 ? 's' : ''} — bot will tag all of them per tweet.
+          </p>
+        </div>
+      )}
+
       {/* Cycle stats */}
       <div className="grid grid-cols-2 gap-2 mb-4">
-        <div className="rounded p-2.5" style={{ backgroundColor: 'var(--input)', border: '1px solid var(--border)' }}>
-          <span className="config-label mb-0.5">Full Cycles Done</span>
+        <div className="rounded p-2.5"
+          style={{ backgroundColor: 'var(--input)', border: '1px solid var(--border)' }}>
+          <span className="config-label mb-0.5">Cycles Completed</span>
           <span className="font-mono-data text-lg font-bold text-foreground">{cycleCount}</span>
         </div>
-        <div className="rounded p-2.5" style={{ backgroundColor: 'var(--input)', border: '1px solid var(--border)' }}>
-          <span className="config-label mb-0.5">Tweets Posted</span>
-          <span className="font-mono-data text-lg font-bold text-foreground">{tweetsPosted}</span>
+        <div className="rounded p-2.5"
+          style={{ backgroundColor: 'var(--input)', border: '1px solid var(--border)' }}>
+          <span className="config-label mb-0.5">Est. Daily Cycles</span>
+          <span className="font-mono-data text-lg font-bold text-foreground">
+            {Math.floor(1440 / intervalMinutes)}
+          </span>
         </div>
       </div>
 
@@ -122,15 +252,22 @@ export default function CycleControlCard({
             </button>
             <button
               type="button"
-              className="btn-secondary px-3 py-2.5 text-sm"
+              className="btn-secondary justify-center py-2.5 text-sm gap-2"
+              style={{ minWidth: '120px' }}
               onClick={onTestTweet}
               disabled={isStarting || isTesting}
-              title="Send one test tweet immediately"
+              title="Fire one tweet immediately to validate your full configuration"
             >
               {isTesting ? (
-                <RotateCcw size={15} className="animate-spin" />
+                <>
+                  <RotateCcw size={15} className="animate-spin" />
+                  Testing…
+                </>
               ) : (
-                <FlaskConical size={15} />
+                <>
+                  <FlaskConical size={15} />
+                  Test Tweet
+                </>
               )}
             </button>
           </>
@@ -138,7 +275,7 @@ export default function CycleControlCard({
           <>
             <button
               type="button"
-              className="btn-secondary flex-1 justify-center py-2.5 text-sm"
+              className="btn-secondary flex-1 justify-center py-2.5 text-sm gap-2"
               onClick={onPause}
             >
               {isPaused ? (
@@ -155,11 +292,11 @@ export default function CycleControlCard({
             </button>
             <button
               type="button"
-              className="flex-1 justify-center py-2.5 text-sm flex items-center gap-1.5 rounded font-medium transition-all"
+              className="flex-1 justify-center py-2.5 text-sm gap-2 rounded font-medium transition-all flex items-center"
               style={{
-                backgroundColor: confirmStop ? 'rgba(239,68,68,0.15)' : 'var(--input)',
-                color: confirmStop ? '#ef4444' : 'var(--muted-foreground)',
-                border: `1px solid ${confirmStop ? 'rgba(239,68,68,0.4)' : 'var(--border)'}`,
+                backgroundColor: confirmStop ? 'rgba(239,68,68,0.15)' : 'transparent',
+                color: confirmStop ? '#ef4444' : '#ef4444',
+                border: `1px solid ${confirmStop ? 'rgba(239,68,68,0.5)' : 'rgba(239,68,68,0.3)'}`,
               }}
               onClick={handleStopClick}
             >
@@ -169,6 +306,12 @@ export default function CycleControlCard({
           </>
         )}
       </div>
+
+      {confirmStop && (
+        <p className="mt-2 text-xs text-red-400 text-center">
+          Click Stop again to confirm. This will end the current session.
+        </p>
+      )}
     </div>
   );
 }
