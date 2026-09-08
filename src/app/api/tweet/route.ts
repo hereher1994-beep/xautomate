@@ -331,13 +331,27 @@ async function tryCreateTweet(
     return { success: false, authError: isHardAuthError || hasSoftAuthKeyword, error: errMsg };
   }
 
-  // STRICT check: tweet must be confirmed by tweet_results.result.rest_id
+  // Flexible check: handle all known X GraphQL response shapes for tweet_results
   const tweetResult =
     (json as any)?.data?.create_tweet?.tweet_results?.result ??
     (json as any)?.data?.createTweet?.tweet_results?.result;
 
-  if (tweetResult?.rest_id) {
-    return { success: true, tweetId: tweetResult.rest_id };
+  if (tweetResult) {
+    // Shape 1: direct rest_id on result
+    if (tweetResult.rest_id) {
+      return { success: true, tweetId: tweetResult.rest_id };
+    }
+    // Shape 2: TweetWithVisibilityResults — tweet is nested under result.tweet
+    if (tweetResult.tweet?.rest_id) {
+      return { success: true, tweetId: tweetResult.tweet.rest_id };
+    }
+    // Shape 3: legacy id_str fallback
+    const legacyId =
+      tweetResult.legacy?.id_str ??
+      tweetResult.tweet?.legacy?.id_str;
+    if (legacyId) {
+      return { success: true, tweetId: legacyId };
+    }
   }
 
   // No tweet_results — this query ID didn't work; caller will try the next one
