@@ -314,7 +314,7 @@ async function injectCookies(page, account, log) {
   // Normalise domain
   const normalised = cookies.map(c => ({
     ...c,
-    domain: c.domain || '.twitter.com',
+    domain: c.domain ? (c.domain.replace('twitter.com', 'x.com')) : '.x.com',
     path: c.path || '/',
     httpOnly: c.httpOnly !== undefined ? c.httpOnly : false,
     secure: c.secure !== undefined ? c.secure : true,
@@ -571,7 +571,7 @@ cat > /opt/xautomate/accounts.json << 'EOF'
 [
   {
     "name": "account1",
-    "cookies": "[{\"name\":\"auth_token\",\"value\":\"PASTE_YOUR_AUTH_TOKEN_HERE\",\"domain\":\".twitter.com\",\"path\":\"/\",\"secure\":true,\"httpOnly\":true,\"sameSite\":\"None\"},{\"name\":\"ct0\",\"value\":\"PASTE_YOUR_CT0_HERE\",\"domain\":\".twitter.com\",\"path\":\"/\",\"secure\":true,\"httpOnly\":false,\"sameSite\":\"Lax\"}]",
+    "cookies": "[{\"name\":\"auth_token\",\"value\":\"PASTE_YOUR_AUTH_TOKEN_HERE\",\"domain\":\".x.com\",\"path\":\"/\",\"secure\":true,\"httpOnly\":true,\"sameSite\":\"None\"},{\"name\":\"ct0\",\"value\":\"PASTE_YOUR_CT0_HERE\",\"domain\":\".x.com\",\"path\":\"/\",\"secure\":true,\"httpOnly\":false,\"sameSite\":\"Lax\"}]",
     "proxy": "",
     "imagesDir": "/opt/xautomate/images/account1",
     "usernames": [
@@ -589,7 +589,7 @@ cat > /opt/xautomate/accounts.json << 'EOF'
   },
   {
     "name": "account2",
-    "cookies": "[{\"name\":\"auth_token\",\"value\":\"PASTE_YOUR_AUTH_TOKEN_HERE\",\"domain\":\".twitter.com\",\"path\":\"/\",\"secure\":true,\"httpOnly\":true,\"sameSite\":\"None\"},{\"name\":\"ct0\",\"value\":\"PASTE_YOUR_CT0_HERE\",\"domain\":\".twitter.com\",\"path\":\"/\",\"secure\":true,\"httpOnly\":false,\"sameSite\":\"Lax\"}]",
+    "cookies": "[{\"name\":\"auth_token\",\"value\":\"PASTE_YOUR_AUTH_TOKEN_HERE\",\"domain\":\".x.com\",\"path\":\"/\",\"secure\":true,\"httpOnly\":true,\"sameSite\":\"None\"},{\"name\":\"ct0\",\"value\":\"PASTE_YOUR_CT0_HERE\",\"domain\":\".x.com\",\"path\":\"/\",\"secure\":true,\"httpOnly\":false,\"sameSite\":\"Lax\"}]",
     "proxy": "",
     "imagesDir": "/opt/xautomate/images/account2",
     "usernames": [
