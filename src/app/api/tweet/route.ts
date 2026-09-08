@@ -109,9 +109,10 @@ function normalizeCookieHeader(cookieString: string): string {
 }
 
 function generateTransactionId(queryId: string): string {
-  const path = `/i/api/graphql/${queryId}/CreateTweet`;
-  const raw = `${path}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
-  return Buffer.from(raw).toString('base64').replace(/=/g, '').slice(0, 80);
+  // Use a simple hex-based transaction ID — base64 with padding can be rejected by X.com
+  const timestamp = Date.now().toString(16);
+  const rand = Math.random().toString(16).slice(2, 18);
+  return `${queryId.slice(0, 8)}-${timestamp}-${rand}`;
 }
 
 export async function POST(req: NextRequest) {
@@ -156,25 +157,24 @@ export async function POST(req: NextRequest) {
   }
 
   // Try each GraphQL query ID in order — newest first
+  let lastAuthError = false;
+  let lastRateLimited = false;
+
   for (const queryId of CREATE_TWEET_QUERY_IDS) {
     try {
       const result = await tryCreateTweet(queryId, cookieHeader, ct0, tweetText, mediaId);
 
       if (result.authError) {
-        return NextResponse.json(
-          {
-            error:
-              'Session cookies are expired or invalid. Please export fresh cookies from x.com and paste them in the Session Cookies field.',
-          },
-          { status: 401 }
-        );
+        // Don't stop immediately — X.com sometimes returns 403 for CSRF issues on one endpoint
+        // but accepts the same cookies on another query ID. Try all before giving up.
+        lastAuthError = true;
+        console.warn(`[tweet] queryId=${queryId} auth error — trying next query ID`);
+        continue;
       }
 
       if (result.rateLimited) {
-        return NextResponse.json(
-          { error: 'Rate limited by X. Please wait a few minutes before trying again.' },
-          { status: 429 }
-        );
+        lastRateLimited = true;
+        continue;
       }
 
       if (result.success && result.tweetId) {
@@ -195,7 +195,24 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // All query IDs exhausted
+  // All query IDs exhausted — report the most specific error
+  if (lastRateLimited) {
+    return NextResponse.json(
+      { error: 'Rate limited by X. Please wait a few minutes before trying again.' },
+      { status: 429 }
+    );
+  }
+
+  if (lastAuthError) {
+    return NextResponse.json(
+      {
+        error:
+          'Session cookies are expired or invalid. Please export fresh cookies from x.com and paste them in the Session Cookies field.',
+      },
+      { status: 401 }
+    );
+  }
+
   return NextResponse.json(
     {
       error:
@@ -254,12 +271,36 @@ async function tryCreateTweet(
   const text = await res.text();
   console.log(`[tweet/graphql] queryId=${queryId} status=${res.status} body=${text.slice(0, 400)}`);
 
-  if (res.status === 401 || res.status === 403) {
+  // 429 = rate limit (not an auth issue)
+  if (res.status === 429) {
+    return { success: false, rateLimited: true };
+  }
+
+  // 401 = definitively expired/invalid session
+  if (res.status === 401) {
     return { success: false, authError: true };
   }
 
-  if (res.status === 429) {
-    return { success: false, rateLimited: true };
+  // 403 = could be CSRF mismatch, not necessarily expired cookies — don't treat as hard auth error
+  // Let the caller try the next query ID; only mark authError if we also see auth error codes in body
+  if (res.status === 403) {
+    // Try to parse body for explicit auth error codes
+    try {
+      const errJson = JSON.parse(text);
+      const errors = (errJson as any).errors;
+      if (errors?.length) {
+        const hasHardAuthError = errors.some(
+          (e: any) => e?.code === 32 || e?.code === 64 || e?.code === 89
+        );
+        if (hasHardAuthError) {
+          return { success: false, authError: true };
+        }
+      }
+    } catch {
+      // ignore parse error
+    }
+    // 403 without explicit auth error codes — treat as transient, not auth failure
+    return { success: false, error: `HTTP 403 (CSRF/transient): ${text.slice(0, 200)}` };
   }
 
   if (!res.ok) {
@@ -278,17 +319,19 @@ async function tryCreateTweet(
   if (errors?.length) {
     const firstErr = errors[0];
     const errMsg: string = firstErr?.message ?? 'GraphQL error';
-    const isAuth =
-      errMsg.toLowerCase().includes('auth') ||
+    // Only treat as auth error for explicit Twitter auth error codes
+    const isHardAuthError =
+      firstErr?.code === 32 ||  // Could not authenticate you
+      firstErr?.code === 64 ||  // Your account is suspended
+      firstErr?.code === 89;    // Invalid or expired token
+    // Soft auth keywords — only flag if no tweet_results present
+    const hasSoftAuthKeyword =
       errMsg.toLowerCase().includes('not authorized') ||
-      firstErr?.code === 32 ||
-      firstErr?.code === 64 ||
-      firstErr?.code === 89;
-    return { success: false, authError: isAuth, error: errMsg };
+      errMsg.toLowerCase().includes('authentication required');
+    return { success: false, authError: isHardAuthError || hasSoftAuthKeyword, error: errMsg };
   }
 
   // STRICT check: tweet must be confirmed by tweet_results.result.rest_id
-  // Do NOT treat a 200 with no tweet_results as success — that is a silent failure.
   const tweetResult =
     (json as any)?.data?.create_tweet?.tweet_results?.result ??
     (json as any)?.data?.createTweet?.tweet_results?.result;

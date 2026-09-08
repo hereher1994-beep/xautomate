@@ -110,11 +110,10 @@ function parseCookieJson(raw: string): { headerString: string; ct0: string; hasA
 }
 
 function generateTransactionId(queryId: string): string {
-  const timestamp = Date.now();
-  const path = `/i/api/graphql/${queryId}/CreateTweet`;
-  const raw = `${path}:${timestamp}:${Math.random().toString(36).slice(2)}`;
-  // btoa is available in Deno/edge runtime
-  return btoa(raw).replace(/=/g, '').slice(0, 80);
+  // Use a simple hex-based transaction ID — btoa with padding can be rejected by X.com
+  const timestamp = Date.now().toString(16);
+  const rand = Math.random().toString(16).slice(2, 18);
+  return `${queryId.slice(0, 8)}-${timestamp}-${rand}`;
 }
 
 async function tryCreateTweet(queryId: string, cookieString: string, ct0: string, tweetText: string, mediaId?: string) {
@@ -165,6 +164,9 @@ async function sendOneTweet(
     await supabase.from('automation_jobs').insert({ config_id: configId, user_id: userId, level, message });
   };
 
+  let hadAuthError = false;
+  let hadRateLimit = false;
+
   for (const queryId of CREATE_TWEET_QUERY_IDS) {
     try {
       const result = await tryCreateTweet(queryId, cookieString, ct0, tweetText);
@@ -182,18 +184,43 @@ async function sendOneTweet(
         // HTTP 200 but no tweet_results — try next query ID
         continue;
       }
-      if (result.status === 401 || result.status === 403) {
-        await log('warn', `⚠️ Authorization error — refresh cookies. Skipping this tweet and retrying next tick.`);
-        // Do NOT stop automation — just skip this tweet and let the next tick retry
-        return false;
+      // 401 = definitively expired session
+      if (result.status === 401) {
+        hadAuthError = true;
+        continue; // try next query ID before giving up
+      }
+      // 403 = could be CSRF mismatch on this specific endpoint, not necessarily expired cookies
+      // Try remaining query IDs before declaring auth failure
+      if (result.status === 403) {
+        // Check if body has explicit hard auth error codes
+        let body = result.body as any;
+        const errors = body?.errors;
+        const hasHardAuthError = errors?.some(
+          (e: any) => e?.code === 32 || e?.code === 64 || e?.code === 89
+        );
+        if (hasHardAuthError) {
+          hadAuthError = true;
+        }
+        // Either way, try next query ID
+        continue;
       }
       if (result.status === 429) {
-        await log('warn', 'Rate limited by X. Will retry next tick.');
-        return false;
+        hadRateLimit = true;
+        continue;
       }
     } catch (err) {
       await log('error', `Network error: ${String(err)}`);
     }
+  }
+
+  // All query IDs exhausted — report the most specific error
+  if (hadRateLimit) {
+    await log('warn', 'Rate limited by X. Will retry next tick.');
+    return false;
+  }
+  if (hadAuthError) {
+    await log('warn', `⚠️ Authorization error — refresh cookies. Skipping this tweet and retrying next tick.`);
+    return false;
   }
   await log('error', `✗ Tweet failed — all query IDs exhausted.`);
   return false;
