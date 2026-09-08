@@ -95,19 +95,16 @@ echo "✅ File limits increased" echo"" echo"━━━━━━━━━━━�
     title: '② Deploy Next.js App',
     description: 'Clones your repo, installs deps, builds Next.js, writes .env.local with your real Supabase keys (auto-read from .env in the repo), starts with PM2.',
     filename: '2-deploy-app.sh',
-    warning: 'Replace YOUR_GITHUB_USERNAME with your actual GitHub username before running.',
     content: `#!/bin/bash
 # ============================================================
 #  XAutomate — Deploy Next.js App
 #  Server: 167.233.122.88
 #  Run as root: bash 2-deploy-app.sh
-#
-#  ⚠️  Replace YOUR_GITHUB_USERNAME below before running
 # ============================================================
 set -e
 
 APP_DIR="/opt/xautomate"
-REPO_URL="https://github.com/YOUR_GITHUB_USERNAME/xautomate.git"
+REPO_URL="https://github.com/hereher1994-beep/xautomate.git"
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" echo"  XAutomate — Deploying Next.js App to 167.233.122.88" echo"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
@@ -801,7 +798,7 @@ export default function DeployPage() {
               <ol className="space-y-2">
                 {[
                   { n: '1', cmd: 'bash 1-setup-server.sh', note: 'Run ONCE on fresh VPS — installs everything' },
-                  { n: '2', cmd: 'bash 2-deploy-app.sh', note: 'Edit REPO_URL inside first, then paste — auto-fills Supabase keys from .env' },
+                  { n: '2', cmd: 'bash 2-deploy-app.sh', note: 'Paste as-is — repo URL pre-filled, auto-fills Supabase keys from .env' },
                   { n: '3', cmd: 'bash 3-install-bot.sh', note: 'Writes the full Puppeteer bot engine' },
                   { n: '4', cmd: 'bash 4-setup-accounts.sh', note: 'Creates accounts.json template' },
                   { n: '5', cmd: 'nano /opt/xautomate/accounts.json', note: 'Fill in your X usernames + passwords' },
@@ -830,7 +827,8 @@ export default function DeployPage() {
         <div className="mb-5 rounded-xl border border-yellow-500/20 bg-yellow-500/5 px-4 py-3 flex gap-2">
           <AlertTriangle size={14} className="text-yellow-400 flex-shrink-0 mt-0.5" />
           <p className="text-xs text-yellow-300">
-            <strong>Script ② (Deploy App)</strong> auto-reads your Supabase URL and Anon Key from the <code className="bg-black/30 px-1 rounded">.env</code> file in your repo — no manual editing needed for those keys.
+            <strong>Script ② (Deploy App)</strong> uses repo <code className="bg-black/30 px-1 rounded">github.com/hereher1994-beep/xautomate</code> — pre-filled, no editing needed.
+            It also auto-reads your Supabase URL and Anon Key from the <code className="bg-black/30 px-1 rounded">.env</code> file in your repo.
             Only <strong>SUPABASE_SERVICE_ROLE_KEY</strong> needs to be added manually if you use it.
           </p>
         </div>
