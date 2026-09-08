@@ -93,7 +93,7 @@ echo "✅ File limits increased" echo"" echo"━━━━━━━━━━━�
   {
     id: 'deploy',
     title: '② Deploy Next.js App',
-    description: 'Clones your repo, installs deps, builds Next.js, writes .env.local with your real Supabase keys (auto-read from .env in the repo), starts with PM2.',
+    description: 'Clones your repo, installs deps, builds Next.js, writes .env.local with ALL keys auto-read from the .env in the repo. Zero edits needed — paste and run.',
     filename: '2-deploy-app.sh',
     content: `#!/bin/bash
 # ============================================================
@@ -129,21 +129,37 @@ echo "🔨 Building Next.js..."
 npm run build
 echo "✅ Build complete"
 
-# Write .env.local — reads keys from the .env file that came with the repo
+# Write .env.local — reads ALL keys from the .env file that came with the repo
 echo "📝 Writing .env.local..."
-SUPABASE_URL=$(grep "^NEXT_PUBLIC_SUPABASE_URL=" .env 2>/dev/null | cut -d'=' -f2- | tr -d '\\r' || echo "")
-SUPABASE_ANON=$(grep "^NEXT_PUBLIC_SUPABASE_ANON_KEY=" .env 2>/dev/null | cut -d'=' -f2- | tr -d '\\r' || echo "")
-GEMINI_KEY=$(grep "^GEMINI_API_KEY=" .env 2>/dev/null | cut -d'=' -f2- | tr -d '\\r' || echo "")
+read_env() { grep "^$1=" .env 2>/dev/null | cut -d'=' -f2- | tr -d '\\r' || echo ""; }
+
+SUPABASE_URL=$(read_env "NEXT_PUBLIC_SUPABASE_URL")
+SUPABASE_ANON=$(read_env "NEXT_PUBLIC_SUPABASE_ANON_KEY")
+SUPABASE_SERVICE=$(read_env "SUPABASE_SERVICE_ROLE_KEY")
+GEMINI_KEY=$(read_env "GEMINI_API_KEY")
+OPENAI_KEY=$(read_env "OPENAI_API_KEY")
+ANTHROPIC_KEY=$(read_env "ANTHROPIC_API_KEY")
+PERPLEXITY_KEY=$(read_env "PERPLEXITY_API_KEY")
+STRIPE_KEY=$(read_env "NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY")
+GA_ID=$(read_env "NEXT_PUBLIC_GA_MEASUREMENT_ID")
+ADSENSE_ID=$(read_env "NEXT_PUBLIC_ADSENSE_ID")
 
 cat > .env.local << ENVEOF
 NEXT_PUBLIC_SUPABASE_URL=\${SUPABASE_URL}
 NEXT_PUBLIC_SUPABASE_ANON_KEY=\${SUPABASE_ANON}
-SUPABASE_SERVICE_ROLE_KEY=
+SUPABASE_SERVICE_ROLE_KEY=\${SUPABASE_SERVICE}
 GEMINI_API_KEY=\${GEMINI_KEY}
+OPENAI_API_KEY=\${OPENAI_KEY}
+ANTHROPIC_API_KEY=\${ANTHROPIC_KEY}
+PERPLEXITY_API_KEY=\${PERPLEXITY_KEY}
+NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=\${STRIPE_KEY}
+NEXT_PUBLIC_GA_MEASUREMENT_ID=\${GA_ID}
+NEXT_PUBLIC_ADSENSE_ID=\${ADSENSE_ID}
 NEXT_PUBLIC_SITE_URL=http://167.233.122.88:3000
 ENVEOF
 
-echo "✅ .env.local written" echo"" echo"⚠️  SUPABASE_SERVICE_ROLE_KEY is blank — add it if needed:" echo"   nano /opt/xautomate/.env.local"
+echo "✅ .env.local written — all keys copied from .env" echo"" echo"📋 Contents of .env.local:"
+cat .env.local
 
 # Start with PM2
 pm2 delete xautomate 2>/dev/null || true
@@ -813,7 +829,7 @@ export default function DeployPage() {
               <ol className="space-y-2">
                 {[
                   { n: '1', cmd: 'bash 1-setup-server.sh', note: 'Run ONCE on fresh VPS — installs everything' },
-                  { n: '2', cmd: 'bash 2-deploy-app.sh', note: 'Paste as-is — repo URL pre-filled, auto-fills Supabase keys from .env' },
+                  { n: '2', cmd: 'bash 2-deploy-app.sh', note: 'Paste as-is — all env vars auto-read from .env, zero edits needed' },
                   { n: '3', cmd: 'bash 3-install-bot.sh', note: 'Writes the full Puppeteer bot engine' },
                   { n: '4', cmd: 'bash 4-setup-accounts.sh', note: 'Creates accounts.json template' },
                   { n: '5', cmd: 'nano /opt/xautomate/accounts.json', note: 'Paste your auth_token + ct0 cookies from Cookie-Editor' },
@@ -842,9 +858,7 @@ export default function DeployPage() {
         <div className="mb-5 rounded-xl border border-yellow-500/20 bg-yellow-500/5 px-4 py-3 flex gap-2">
           <AlertTriangle size={14} className="text-yellow-400 flex-shrink-0 mt-0.5" />
           <p className="text-xs text-yellow-300">
-            <strong>Script ② (Deploy App)</strong> uses repo <code className="bg-black/30 px-1 rounded">github.com/hereher1994-beep/xautomate</code> — pre-filled, no editing needed.
-            It also auto-reads your Supabase URL and Anon Key from the <code className="bg-black/30 px-1 rounded">.env</code> file in your repo.
-            Only <strong>SUPABASE_SERVICE_ROLE_KEY</strong> needs to be added manually if you use it.
+            <strong>Script ② (Deploy App)</strong> is fully pre-filled — repo URL and <strong>all</strong> environment variables (Supabase URL, Anon Key, Service Role Key, Gemini, etc.) are auto-read from the <code className="bg-black/30 px-1 rounded">.env</code> file that ships with your repo. <strong>Zero edits needed — paste and run.</strong>
             <br /><strong>Script ④ (Setup Accounts)</strong> uses <strong>session cookies only</strong> — no username/password. Export <code className="bg-black/30 px-1 rounded">auth_token</code> + <code className="bg-black/30 px-1 rounded">ct0</code> from Cookie-Editor and paste into <code className="bg-black/30 px-1 rounded">accounts.json</code>.
           </p>
         </div>
