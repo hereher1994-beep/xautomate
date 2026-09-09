@@ -166,17 +166,18 @@ export default function AccountPage({ account, onUpdate, onRemove, onBack }: Acc
       const session = accountSessionRef.current;
       const freshProxy = proxyRef.current;
 
-      // Prefer OAuth token; fall back to cookies
-      const oauthToken = session?.accessToken;
+      // Use browser session cookies (new flow) or fall back to manually pasted cookies
+      const sessionCookieJson = session?.cookieJson;
+      const sessionCt0 = session?.ct0;
       const rawCookies = cookiesRef.current;
 
-      if (!oauthToken && !rawCookies.trim()) {
-        addLog('error', `[${account.name}] Tweet aborted — not signed in with X and no cookies set.`);
+      if (!sessionCookieJson && !rawCookies.trim()) {
+        addLog('error', `[${account.name}] Tweet aborted — not logged in with X and no cookies set.`);
         return false;
       }
 
-      // Cookie-based auth validation (only if not using OAuth)
-      if (!oauthToken) {
+      // Cookie-based auth validation (only if not using browser session)
+      if (!sessionCookieJson) {
         const parsed = parseCookieJson(rawCookies);
         const ct0 = parsed.pairs['ct0'] ?? '';
         if (!parsed.hasAuthToken || !ct0) {
@@ -188,15 +189,21 @@ export default function AccountPage({ account, onUpdate, onRemove, onBack }: Acc
       try {
         if (attempt > 1) addLog('warn', `[${account.name}] Retry ${attempt - 1}/${MAX_RETRIES - 1}…`);
 
-        let body: Record<string, unknown> = { tweetText };
+        let body: Record<string, unknown>;
 
-        if (oauthToken) {
-          // OAuth 2.0 path
-          body.accessToken = oauthToken;
-          if (imageDataUrl) body.imageDataUrl = imageDataUrl;
-          if (freshProxy) body.proxy = freshProxy;
+        if (sessionCookieJson && sessionCt0) {
+          // Browser session path — use cookies from login
+          const parsed = parseCookieJson(sessionCookieJson);
+          body = {
+            cookieString: parsed.headerString,
+            ct0: sessionCt0,
+            tweetText,
+            ...(imageDataUrl ? { imageDataUrl } : {}),
+            ...(freshProxy ? { proxy: freshProxy } : {}),
+            forceRefresh: attempt > 1,
+          };
         } else {
-          // Legacy cookie path
+          // Manually pasted cookies fallback
           const parsed = parseCookieJson(rawCookies);
           const ct0 = parsed.pairs['ct0'] ?? '';
           body = {
@@ -218,20 +225,18 @@ export default function AccountPage({ account, onUpdate, onRemove, onBack }: Acc
         const data = await res.json() as Record<string, unknown>;
 
         if (res.ok && data.success) {
-          // Update ct0 if returned (cookie path only)
-          if (!oauthToken) {
-            const newCt0 = data.newCt0 as string | null | undefined;
-            if (newCt0) {
-              try {
-                const cookieArray = JSON.parse(rawCookies) as Array<{ name: string; value: string }>;
-                if (Array.isArray(cookieArray)) {
-                  const idx = cookieArray.findIndex(c => c.name === 'ct0');
-                  if (idx !== -1) cookieArray[idx] = { ...cookieArray[idx], value: newCt0 };
-                  else cookieArray.push({ name: 'ct0', value: newCt0 });
-                  onUpdate(account.id, { cookies: JSON.stringify(cookieArray) });
-                }
-              } catch { /* non-critical */ }
-            }
+          // Update ct0 if returned
+          const newCt0 = data.newCt0 as string | null | undefined;
+          if (newCt0 && !sessionCookieJson) {
+            try {
+              const cookieArray = JSON.parse(rawCookies) as Array<{ name: string; value: string }>;
+              if (Array.isArray(cookieArray)) {
+                const idx = cookieArray.findIndex(c => c.name === 'ct0');
+                if (idx !== -1) cookieArray[idx] = { ...cookieArray[idx], value: newCt0 };
+                else cookieArray.push({ name: 'ct0', value: newCt0 });
+                onUpdate(account.id, { cookies: JSON.stringify(cookieArray) });
+              }
+            } catch { /* non-critical */ }
           }
 
           const tweetData = data.data as { data?: { create_tweet?: { tweet_results?: { result?: { rest_id?: string } } } } } | undefined;
@@ -242,7 +247,7 @@ export default function AccountPage({ account, onUpdate, onRemove, onBack }: Acc
 
         const errMsg = (data.error as string) ?? `HTTP ${res.status}`;
         if (res.status === 401 || res.status === 403) {
-          addLog('error', `[${account.name}] Auth error — stopping. Re-authenticate your X account.`);
+          addLog('error', `[${account.name}] Auth error — stopping. Re-login to your X account.`);
           stopRef.current = true;
           return false;
         }

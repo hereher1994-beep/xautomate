@@ -1,28 +1,41 @@
 'use client';
 
-import React, { useEffect, useState, Suspense } from 'react';
-import { signIn } from 'next-auth/react';
-import { useSearchParams } from 'next/navigation';
+import React, { useState } from 'react';
+import { Eye, EyeOff, Loader2, AlertCircle, User, Lock } from 'lucide-react';
 import AppLogo from '@/components/ui/AppLogo';
+import { useRouter } from 'next/navigation';
 
-function LoginContent() {
-  const searchParams = useSearchParams();
-  const accountId = searchParams?.get('accountId') ?? '';
-  const proxy = searchParams?.get('proxy') ?? '';
-  const [isConnecting, setIsConnecting] = useState(false);
+export default function LoginPage() {
+  const router = useRouter();
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
+  const [loginError, setLoginError] = useState('');
 
-  const handleSignIn = async () => {
-    setIsConnecting(true);
+  const handleLogin = async () => {
+    if (!username.trim() || !password.trim()) {
+      setLoginError('Enter your X username and password.');
+      return;
+    }
+    setIsLoggingIn(true);
+    setLoginError('');
     try {
-      // Store accountId + proxy in cookies before OAuth redirect
-      await fetch('/api/auth/set-pending-account', {
+      const res = await fetch('/api/auth/browser-login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ accountId: accountId || undefined, proxy }),
+        body: JSON.stringify({ username: username.trim(), password }),
       });
-      await signIn('twitter', { callbackUrl: accountId ? `/account/${accountId}` : '/' });
+      const data = await res.json() as { ok: boolean; error?: string };
+      if (!res.ok || !data.ok) {
+        setLoginError(data.error ?? 'Login failed. Check your credentials.');
+        return;
+      }
+      router.push('/');
     } catch {
-      setIsConnecting(false);
+      setLoginError('Network error. Please try again.');
+    } finally {
+      setIsLoggingIn(false);
     }
   };
 
@@ -30,66 +43,103 @@ function LoginContent() {
     <div className="min-h-screen flex flex-col items-center justify-center px-4"
       style={{ backgroundColor: 'var(--background)' }}>
       <div className="w-full max-w-sm">
-        {/* Logo */}
         <div className="flex flex-col items-center mb-8">
           <AppLogo size={48} />
           <h1 className="mt-3 text-2xl font-bold text-foreground tracking-tight">XAutomate</h1>
           <p className="mt-1 text-sm text-muted-foreground">Automated X posting, powered by your account</p>
         </div>
 
-        {/* Login card */}
         <div className="config-card flex flex-col gap-4">
           <div className="text-center">
-            <h2 className="text-base font-semibold text-foreground">Sign in to continue</h2>
+            <h2 className="text-base font-semibold text-foreground">Sign in with X</h2>
             <p className="mt-1 text-xs text-muted-foreground">
-              Connect your X account once — stay logged in forever.
+              Enter your X credentials. The app logs in once and keeps your session active.
             </p>
-            {proxy && (
-              <p className="mt-2 text-xs" style={{ color: 'var(--primary)' }}>
-                🛡 Will connect via proxy: <span className="font-mono-data">{proxy?.replace(/:[^:@]+@/, ':***@')}</span>
-              </p>
-            )}
           </div>
 
+          <div className="flex flex-col gap-1">
+            <label className="config-label">Username or Email</label>
+            <div className="relative">
+              <User size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
+              <input
+                type="text"
+                className="config-input pl-8"
+                placeholder="@username or email"
+                value={username}
+                onChange={e => setUsername(e.target.value)}
+                disabled={isLoggingIn}
+                autoComplete="username"
+                onKeyDown={e => e.key === 'Enter' && handleLogin()}
+              />
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <label className="config-label">Password</label>
+            <div className="relative">
+              <Lock size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
+              <input
+                type={showPassword ? 'text' : 'password'}
+                className="config-input pl-8 pr-9"
+                placeholder="Your X password"
+                value={password}
+                onChange={e => setPassword(e.target.value)}
+                disabled={isLoggingIn}
+                autoComplete="current-password"
+                onKeyDown={e => e.key === 'Enter' && handleLogin()}
+              />
+              <button
+                type="button"
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                onClick={() => setShowPassword(p => !p)}
+                tabIndex={-1}
+                aria-label={showPassword ? 'Hide password' : 'Show password'}
+              >
+                {showPassword ? <EyeOff size={13} /> : <Eye size={13} />}
+              </button>
+            </div>
+          </div>
+
+          {loginError && (
+            <div className="flex items-start gap-2 p-2.5 rounded-lg text-xs"
+              style={{ backgroundColor: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)', color: '#ef4444' }}>
+              <AlertCircle size={13} className="flex-shrink-0 mt-0.5" />
+              <span>{loginError}</span>
+            </div>
+          )}
+
           <button
-            onClick={handleSignIn}
-            disabled={isConnecting}
+            onClick={handleLogin}
+            disabled={isLoggingIn || !username.trim() || !password.trim()}
             className="w-full flex items-center justify-center gap-3 py-3 px-4 rounded-lg font-semibold text-sm transition-all"
             style={{
               backgroundColor: '#000',
               color: '#fff',
               border: '1px solid rgba(255,255,255,0.15)',
-              opacity: isConnecting ? 0.7 : 1,
+              opacity: (isLoggingIn || !username.trim() || !password.trim()) ? 0.6 : 1,
+              cursor: (isLoggingIn || !username.trim() || !password.trim()) ? 'not-allowed' : 'pointer',
             }}
           >
-            {/* X logo */}
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-              <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-4.714-6.231-5.401 6.231H2.744l7.73-8.835L1.254 2.25H8.08l4.253 5.622 5.91-5.622Zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
-            </svg>
-            {isConnecting ? 'Connecting…' : 'Sign in with X'}
+            {isLoggingIn ? (
+              <>
+                <Loader2 size={16} className="animate-spin" />
+                Logging in…
+              </>
+            ) : (
+              <>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                  <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-4.714-6.231-5.401 6.231H2.744l7.73-8.835L1.254 2.25H8.08l4.253 5.622 5.91-5.622Zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
+                </svg>
+                Login with X
+              </>
+            )}
           </button>
-
-          <p className="text-center text-xs text-muted-foreground">
-            Grants <span className="text-foreground font-medium">tweet.write</span> permission so XAutomate can post on your behalf.
-          </p>
         </div>
 
         <p className="mt-6 text-center text-xs text-muted-foreground">
-          Your credentials are never stored — only the OAuth token is kept in your session.
+          Your credentials are used only to establish a browser session — no API keys required.
         </p>
       </div>
     </div>
-  );
-}
-
-export default function LoginPage() {
-  return (
-    <Suspense fallback={
-      <div className="min-h-screen flex items-center justify-center" style={{ backgroundColor: 'var(--background)' }}>
-        <div className="text-muted-foreground text-sm">Loading…</div>
-      </div>
-    }>
-      <LoginContent />
-    </Suspense>
   );
 }
