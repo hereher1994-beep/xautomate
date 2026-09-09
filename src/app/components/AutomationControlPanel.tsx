@@ -215,11 +215,6 @@ export default function AutomationControlPanel({ account, onAccountChange }: Aut
       return;
     }
 
-    if (tweetText.length > 280) {
-      addLog('error', `Cycle #${newCount} aborted — tweet too long (${tweetText.length}/280 chars). Reduce context or usernames per tweet.`);
-      return;
-    }
-
     // ── Step 6: Fire the tweet ────────────────────────────────────────
     try {
       const res = await fetch('/api/tweet', {
@@ -264,9 +259,6 @@ export default function AutomationControlPanel({ account, onAccountChange }: Aut
 
     addLog('success', `Cycle #${newCount} complete.`);
 
-    if (newCount % 3 === 0) {
-      addLog('warn', `Rate-limit buffer applied after cycle #${newCount}.`);
-    }
   }, [addLog, rotateCt0]);
 
   // ── Test Tweet — fire one tweet immediately to validate config ─────
