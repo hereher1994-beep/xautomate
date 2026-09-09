@@ -157,6 +157,38 @@ export default function AutomationControlPanel({ account, onAccountChange }: Aut
     } catch { /* ignore */ }
   }, [setCookies, addLog]);
 
+  // ── Cookie validity check — warns user if cookies look expired ────
+  const validateCookies = useCallback((rawCookies: string): { valid: boolean; warning?: string } => {
+    if (!rawCookies.trim()) {
+      return { valid: false, warning: 'No cookies found. Paste your X session cookies JSON first.' };
+    }
+    const parsed = parseCookieJson(rawCookies);
+    if (parsed.count === 0) {
+      return { valid: false, warning: 'Could not parse cookies. Paste the JSON array from Cookie-Editor → Export → JSON.' };
+    }
+    if (!parsed.hasAuthToken) {
+      return { valid: false, warning: 'auth_token is missing from your cookies. Re-export cookies from Cookie-Editor while logged in to X.' };
+    }
+    if (!parsed.hasCt0) {
+      return { valid: false, warning: 'ct0 CSRF token is missing. Re-export cookies from Cookie-Editor while logged in to X.' };
+    }
+    const authTokenValue = parsed.pairs['auth_token'] ?? '';
+    if (!authTokenValue || authTokenValue.trim() === '') {
+      return {
+        valid: false,
+        warning: '⚠️ Your auth_token cookie appears to be empty — your X session has likely expired. Please log in to X, re-export cookies via Cookie-Editor, and paste them here.',
+      };
+    }
+    const ct0Value = parsed.pairs['ct0'] ?? '';
+    if (!ct0Value || ct0Value.trim() === '') {
+      return {
+        valid: false,
+        warning: '⚠️ Your ct0 CSRF token is empty — your X session may have expired. Please refresh your X session and re-export cookies.',
+      };
+    }
+    return { valid: true };
+  }, []);
+
   // ── Fire a real tweet cycle ────────────────────────────────────────
   const fireCycle = useCallback(async () => {
     const newCount = cycleCountRef.current + 1;
@@ -301,6 +333,18 @@ export default function AutomationControlPanel({ account, onAccountChange }: Aut
       toast.error('Context template empty', { description: 'Add a context/message template before testing.' });
       return;
     }
+
+    // ── Cookie validity check ─────────────────────────────────────────
+    const cookieCheck = validateCookies(currentCookies);
+    if (!cookieCheck.valid) {
+      toast.error('Cookies invalid or expired', {
+        description: cookieCheck.warning,
+        duration: 8000,
+      });
+      addLog('error', `⚠️ Cookie validation failed: ${cookieCheck.warning}`);
+      return;
+    }
+
     const parsed = parseCookieJson(currentCookies);
     if (!parsed.hasAuthToken || !parsed.hasCt0) {
       toast.error('Missing auth_token or ct0', { description: 'Make sure your cookies include auth_token and ct0.' });
@@ -320,7 +364,7 @@ export default function AutomationControlPanel({ account, onAccountChange }: Aut
     } finally {
       setIsTesting(false);
     }
-  }, [addLog, fireCycle]);
+  }, [addLog, fireCycle, validateCookies]);
 
   // ── Start automation ───────────────────────────────────────────────
   const handleStart = useCallback(async () => {
@@ -334,6 +378,17 @@ export default function AutomationControlPanel({ account, onAccountChange }: Aut
     }
     if (!context.trim()) {
       toast.error('Context template empty', { description: 'Add a context/message template before starting.' });
+      return;
+    }
+
+    // ── Cookie validity check ─────────────────────────────────────────
+    const cookieCheck = validateCookies(cookies);
+    if (!cookieCheck.valid) {
+      toast.error('Cookies invalid or expired', {
+        description: cookieCheck.warning,
+        duration: 8000,
+      });
+      addLog('error', `⚠️ Cookie validation failed — automation blocked: ${cookieCheck.warning}`);
       return;
     }
 
@@ -390,7 +445,7 @@ export default function AutomationControlPanel({ account, onAccountChange }: Aut
         return prev - 1;
       });
     }, 1000);
-  }, [cookies, usernames, context, proxy, intervalMinutes, usernamesPerTweet, addLog, fireCycle]);
+  }, [cookies, usernames, context, proxy, intervalMinutes, usernamesPerTweet, addLog, fireCycle, validateCookies]);
 
   // ── Stop automation ────────────────────────────────────────────────
   const handleStop = useCallback(() => {
