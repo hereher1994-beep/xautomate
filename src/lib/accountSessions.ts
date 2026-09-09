@@ -1,22 +1,28 @@
 'use client';
 
 /**
- * Multi-account Twitter session storage.
- * Each account (by accountId) stores its own OAuth access token + Twitter user info.
+ * Multi-account X session storage.
+ * Each account stores its username, password, and extracted session cookies.
  * Sessions persist in localStorage so every logged-in account stays logged in.
  */
 
 export interface AccountSession {
   accountId: string;
-  accessToken: string;
-  twitterUserId: string;
-  twitterName: string;
-  twitterImage: string;
+  username: string;
+  password: string;
+  /** Serialized cookie JSON array from the browser login */
+  cookieJson: string;
+  /** The auth_token value extracted from cookies */
+  authToken: string;
+  /** The ct0 (CSRF token) value extracted from cookies */
+  ct0: string;
   proxy: string;
   loggedInAt: number;
+  /** Display name shown in UI */
+  displayName?: string;
 }
 
-const LS_KEY = 'xautomate_account_sessions';
+const LS_KEY = 'xautomate_account_sessions_v2';
 
 export function loadAllSessions(): AccountSession[] {
   if (typeof window === 'undefined') return [];

@@ -2,7 +2,6 @@
 
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { Toaster, toast } from 'sonner';
-import { useSession } from 'next-auth/react';
 import StatusBar from './StatusBar';
 import ProxyConfigCard from './ProxyConfigCard';
 import TwitterLoginCard from './TwitterLoginCard';
@@ -12,6 +11,8 @@ import ImageAttachmentManager from './ImageAttachmentManager';
 import CycleControlCard from './CycleControlCard';
 import ActivityLog from './ActivityLog';
 import type { AutomationStatus, LogEntry, AccountConfig, ImageAttachment } from '../types/automation';
+import { getSessionForAccount, type AccountSession } from '@/lib/accountSessions';
+import { parseCookieJson } from '../types/automation';
 
 const INITIAL_LOG: LogEntry[] = [
   {
@@ -28,8 +29,12 @@ interface AutomationControlPanelProps {
 }
 
 export default function AutomationControlPanel({ account, onAccountChange }: AutomationControlPanelProps) {
-  const { data: session } = useSession();
-  const accessToken = (session as any)?.accessToken as string | undefined;
+  const [browserSession, setBrowserSession] = useState<AccountSession | null>(() => {
+    if (typeof window !== 'undefined' && account?.id) {
+      return getSessionForAccount(account.id);
+    }
+    return null;
+  });
 
   // ── Core config state — seeded from account prop if provided ───────
   const [proxy, setProxyState] = useState(account?.proxy ?? '');
@@ -113,8 +118,10 @@ export default function AutomationControlPanel({ account, onAccountChange }: Aut
   usernamesPerTweetRef.current = usernamesPerTweet;
   const contextRef = useRef(context);
   contextRef.current = context;
-  const accessTokenRef = useRef(accessToken);
-  accessTokenRef.current = accessToken;
+  const browserSessionRef = useRef(browserSession);
+  browserSessionRef.current = browserSession;
+  const accessTokenRef = useRef(browserSession?.authToken);
+  accessTokenRef.current = browserSession?.authToken;
 
   // ── Log helper ─────────────────────────────────────────────────────
   const addLog = useCallback((level: LogEntry['level'], message: string) => {
@@ -135,14 +142,14 @@ export default function AutomationControlPanel({ account, onAccountChange }: Aut
     const ts = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
     setLastCycleTime(ts);
 
-    const currentAccessToken = accessTokenRef.current;
+    const currentBrowserSession = browserSessionRef.current;
     const currentImages = imagesRef.current;
     const currentUsernames = usernamesRef.current;
     const currentUsernamesPerTweet = usernamesPerTweetRef.current;
     const currentContext = contextRef.current;
 
-    if (!currentAccessToken) {
-      addLog('error', `Cycle #${newCount} aborted — not signed in with X. Please sign in first.`);
+    if (!currentBrowserSession?.authToken) {
+      addLog('error', `Cycle #${newCount} aborted — not logged in with X. Please log in first.`);
       return;
     }
 
@@ -184,7 +191,8 @@ export default function AutomationControlPanel({ account, onAccountChange }: Aut
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          accessToken: currentAccessToken,
+          cookieString: parseCookieJson(currentBrowserSession.cookieJson).headerString,
+          ct0: currentBrowserSession.ct0,
           tweetText,
           ...(imageDataUrl ? { imageDataUrl } : {}),
         }),
@@ -227,11 +235,11 @@ export default function AutomationControlPanel({ account, onAccountChange }: Aut
 
   // ── Test Tweet ─────────────────────────────────────────────────────
   const handleTestTweet = useCallback(async () => {
-    const currentAccessToken = accessTokenRef.current;
+    const currentBrowserSession = browserSessionRef.current;
     const currentContext = contextRef.current;
 
-    if (!currentAccessToken) {
-      toast.error('Not signed in', { description: 'Please sign in with X before testing.' });
+    if (!currentBrowserSession?.authToken) {
+      toast.error('Not logged in', { description: 'Please log in with X before testing.' });
       return;
     }
     if (!currentContext.trim()) {
@@ -256,8 +264,8 @@ export default function AutomationControlPanel({ account, onAccountChange }: Aut
 
   // ── Start automation ───────────────────────────────────────────────
   const handleStart = useCallback(async () => {
-    if (!accessToken) {
-      toast.error('Not signed in', { description: 'Please sign in with X before starting automation.' });
+    if (!browserSession?.authToken) {
+      toast.error('Not logged in', { description: 'Please log in with X before starting automation.' });
       return;
     }
     if (usernames.length === 0) {
@@ -279,7 +287,7 @@ export default function AutomationControlPanel({ account, onAccountChange }: Aut
       addLog('warn', 'No proxy set — using direct connection.');
     }
 
-    addLog('info', `OAuth 2.0 token active — authenticated as ${session?.user?.name ?? 'unknown'}`);
+    addLog('info', `OAuth 2.0 token active — authenticated as ${browserSession?.user?.name ?? 'unknown'}`);
     addLog('info', `Context template: "${context.slice(0, 60)}${context.length > 60 ? '...' : ''}"`);
     addLog('success', `Automation started — ${usernames.length} targets (${usernamesPerTweet} tagged per tweet), ${intervalMinutes}m interval.`);
 
@@ -304,7 +312,7 @@ export default function AutomationControlPanel({ account, onAccountChange }: Aut
         return prev - 1;
       });
     }, 1000);
-  }, [accessToken, usernames, context, proxy, intervalMinutes, usernamesPerTweet, addLog, fireCycle, session]);
+  }, [browserSession, usernames, context, proxy, intervalMinutes, usernamesPerTweet, addLog, fireCycle]);
 
   // ── Stop automation ────────────────────────────────────────────────
   const handleStop = useCallback(() => {
@@ -400,7 +408,7 @@ export default function AutomationControlPanel({ account, onAccountChange }: Aut
           {/* Left column — twitter login + proxy + context */}
           <div className="lg:col-span-1 xl:col-span-2 flex flex-col gap-4">
             <TwitterLoginCard
-              session={session}
+              session={browserSession}
               isRunning={status === 'running'}
             />
             <ProxyConfigCard
