@@ -191,13 +191,6 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  if (tweetText.length > 280) {
-    return NextResponse.json(
-      { error: `Tweet text too long: ${tweetText.length} chars (max 280)` },
-      { status: 400 }
-    );
-  }
-
   // Upload image if provided
   let mediaId: string | undefined;
   if (imageDataUrl) {
