@@ -170,6 +170,98 @@ async function postTweetV2(
   return { ok: res.ok, status: res.status, body, newCt0 };
 }
 
+/**
+ * Third attempt: post tweet using X's GraphQL CreateTweet endpoint.
+ * This is the same endpoint the X web app uses internally.
+ */
+async function postTweetGraphQL(
+  cookieString: string,
+  ct0: string,
+  tweetText: string,
+  mediaId?: string
+): Promise<{ ok: boolean; status: number; body: unknown; newCt0?: string }> {
+  const variables: Record<string, unknown> = {
+    tweet_text: tweetText,
+    dark_request: false,
+    media: {
+      media_entities: mediaId ? [{ media_id: mediaId, tagged_users: [] }] : [],
+      possibly_sensitive: false,
+    },
+    semantic_annotation_ids: [],
+  };
+
+  const features = {
+    tweetypie_unmention_optimization_enabled: true,
+    responsive_web_edit_tweet_api_enabled: true,
+    graphql_is_translatable_rweb_tweet_is_translatable_enabled: true,
+    view_counts_everywhere_api_enabled: true,
+    longform_notetweets_consumption_enabled: true,
+    responsive_web_twitter_article_tweet_consumption_enabled: false,
+    tweet_awards_web_tipping_enabled: false,
+    longform_notetweets_rich_text_read_enabled: true,
+    longform_notetweets_inline_media_enabled: true,
+    responsive_web_graphql_exclude_directive_enabled: true,
+    verified_phone_label_enabled: false,
+    freedom_of_speech_not_reach_fetch_enabled: true,
+    standardized_nudges_misinfo: true,
+    tweet_with_visibility_results_prefer_gql_limited_actions_policy_enabled: true,
+    responsive_web_media_download_video_enabled: false,
+    responsive_web_graphql_skip_user_profile_image_extensions_enabled: false,
+    responsive_web_graphql_timeline_navigation_enabled: true,
+    responsive_web_enhance_cards_enabled: false,
+  };
+
+  const res = await fetch(
+    'https://twitter.com/i/api/graphql/SoVnbfCycZ7fERGCwpZkYA/CreateTweet',
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${X_BEARER_TOKEN}`,
+        'x-csrf-token': ct0,
+        'Cookie': cookieString,
+        'x-twitter-active-user': 'yes',
+        'x-twitter-auth-type': 'OAuth2Session',
+        'x-twitter-client-language': 'en',
+        'Origin': 'https://twitter.com',
+        'Referer': 'https://twitter.com/',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Accept': '*/*',
+        'Accept-Language': 'en-US,en;q=0.9',
+      },
+      body: JSON.stringify({ variables, features }),
+    }
+  );
+
+  let newCt0: string | undefined;
+  const setCookieHeader = res.headers.get('set-cookie');
+  if (setCookieHeader) {
+    const ct0Match = setCookieHeader.match(/(?:^|,\s*)ct0=([^;,]+)/i);
+    if (ct0Match) newCt0 = ct0Match[1];
+  }
+
+  let body: unknown;
+  try {
+    body = await res.json();
+  } catch {
+    body = await res.text().catch(() => '(no body)');
+  }
+
+  // GraphQL returns 200 even for errors — check for error objects
+  const bodyObj = body as Record<string, unknown>;
+  if (res.ok && bodyObj?.errors) {
+    const errors = bodyObj.errors as Array<{ message?: string; code?: number }>;
+    const authError = errors.find(e => e.code === 32 || e.code === 64 || e.code === 89 || e.code === 135 || e.code === 326);
+    if (authError) {
+      return { ok: false, status: 401, body, newCt0 };
+    }
+    // Non-auth GraphQL error — treat as failure but not auth
+    return { ok: false, status: 400, body, newCt0 };
+  }
+
+  return { ok: res.ok, status: res.status, body, newCt0 };
+}
+
 export async function POST(req: NextRequest) {
   let payload: TweetRequestBody;
   try {
@@ -199,7 +291,7 @@ export async function POST(req: NextRequest) {
 
     if (v1Result.ok) {
       const data = v1Result.body as Record<string, unknown>;
-      const tweetId = (data?.id_str as string) ?? null;
+      let tweetId = (data?.id_str as string) ?? null;
       return NextResponse.json({
         success: true,
         api: 'v1.1',
@@ -210,16 +302,10 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // Hard auth failure — no point trying v2
+    // On auth failure from v1.1, fall through to v2 instead of hard-stopping
+    // (v2 uses a different auth path and may succeed with the same cookies)
     if (v1Result.status === 401 || v1Result.status === 403) {
-      return NextResponse.json(
-        {
-          error: `Authentication failed (HTTP ${v1Result.status}). Your cookies may be expired or invalid.`,
-          status: v1Result.status,
-          detail: v1Result.body,
-        },
-        { status: v1Result.status }
-      );
+      console.warn(`[tweet/route] v1.1 auth failure (${v1Result.status}), falling through to v2`);
     }
   } catch (err) {
     // v1.1 threw — fall through to v2
@@ -233,7 +319,7 @@ export async function POST(req: NextRequest) {
     if (v2Result.ok) {
       const data = v2Result.body as Record<string, unknown>;
       const tweetData = data?.data as { id?: string } | undefined;
-      const tweetId = tweetData?.id ?? null;
+      let tweetId = tweetData?.id ?? null;
       return NextResponse.json({
         success: true,
         api: 'v2',
@@ -244,28 +330,53 @@ export async function POST(req: NextRequest) {
       });
     }
 
+    // Fall through to GraphQL on auth failure
     if (v2Result.status === 401 || v2Result.status === 403) {
-      return NextResponse.json(
-        {
-          error: `Authentication failed (HTTP ${v2Result.status}). Your cookies may be expired or invalid.`,
-          status: v2Result.status,
-          detail: v2Result.body,
-        },
-        { status: v2Result.status }
-      );
+      console.warn(`[tweet/route] v2 auth failure (${v2Result.status}), falling through to GraphQL`);
+    }
+  } catch (err) {
+    console.error('[tweet/route] v2 threw:', err);
+  }
+
+  // ── Attempt 3: GraphQL CreateTweet (web app endpoint) ─────────────
+  try {
+    const gqlResult = await postTweetGraphQL(cookieString, ct0, tweetText, mediaId);
+
+    if (gqlResult.ok) {
+      const data = gqlResult.body as Record<string, unknown>;
+      const tweetResult = (data as Record<string, unknown>);
+      // Extract tweet ID from GraphQL response structure
+      let tweetId: string | null = null;
+      try {
+        const createTweet = (tweetResult?.data as Record<string, unknown>)?.create_tweet as Record<string, unknown>;
+        const tweetResults = createTweet?.tweet_results as Record<string, unknown>;
+        const result = tweetResults?.result as Record<string, unknown>;
+        const legacy = result?.legacy as Record<string, unknown>;
+        tweetId = (legacy?.id_str as string) ?? null;
+      } catch { /* ignore */ }
+
+      return NextResponse.json({
+        success: true,
+        api: 'graphql',
+        tweetId,
+        mediaId: mediaId ?? null,
+        newCt0: gqlResult.newCt0 ?? null,
+        data: gqlResult.body,
+      });
     }
 
+    // All three attempts failed — return the auth error
     return NextResponse.json(
       {
-        error: `Tweet failed (HTTP ${v2Result.status}). Check your session cookies and try again.`,
-        status: v2Result.status,
-        detail: v2Result.body,
+        error: `Authentication failed after 3 attempts (v1.1, v2, GraphQL). Your cookies may be expired — paste fresh cookies from Cookie-Editor and try again.`,
+        status: gqlResult.status,
+        detail: gqlResult.body,
       },
-      { status: 502 }
+      { status: gqlResult.status === 401 || gqlResult.status === 403 ? gqlResult.status : 502 }
     );
   } catch (err) {
     return NextResponse.json(
-      { error: `Tweet request failed: ${String(err)}` },
+      { error: `All tweet attempts failed: ${String(err)}` },
       { status: 502 }
     );
   }
