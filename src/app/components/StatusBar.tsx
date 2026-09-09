@@ -1,7 +1,7 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
-import { Activity, Clock, Users, ImageIcon, Timer, Zap } from 'lucide-react';
+import React from 'react';
+import { Activity, Clock, Users, ImageIcon, Zap } from 'lucide-react';
 import type { AutomationStatus } from '../types/automation';
 
 interface StatusBarProps {
@@ -10,14 +10,6 @@ interface StatusBarProps {
   lastCycleTime: string | null;
   targetCount: number;
   imageCount: number;
-  nextCycleIn: number | null;
-  intervalMinutes: number;
-}
-
-function formatCountdown(seconds: number): string {
-  const m = Math.floor(seconds / 60);
-  const s = seconds % 60;
-  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
 }
 
 const STATUS_CONFIG: Record<AutomationStatus, { label: string; dotClass: string; badgeClass: string }> = {
@@ -34,8 +26,6 @@ export default function StatusBar({
   lastCycleTime,
   targetCount,
   imageCount,
-  nextCycleIn,
-  intervalMinutes,
 }: StatusBarProps) {
   const cfg = STATUS_CONFIG[status];
 
@@ -90,19 +80,6 @@ export default function StatusBar({
         <div>
           <span className="text-xs text-muted-foreground block leading-none mb-0.5">Images</span>
           <span className="font-mono-data text-sm font-semibold text-foreground">{imageCount}</span>
-        </div>
-      </div>
-
-      <div className="w-px h-6 bg-border hidden sm:block" />
-
-      {/* Next cycle countdown */}
-      <div className="flex items-center gap-2">
-        <Timer size={14} className={nextCycleIn !== null ? 'text-primary' : 'text-muted-foreground'} />
-        <div>
-          <span className="text-xs text-muted-foreground block leading-none mb-0.5">Next Cycle</span>
-          <span className={`font-mono-data text-sm font-semibold ${nextCycleIn !== null ? 'text-primary' : 'text-muted-foreground'}`}>
-            {nextCycleIn !== null ? formatCountdown(nextCycleIn) : `${intervalMinutes}m 00s`}
-          </span>
         </div>
       </div>
 

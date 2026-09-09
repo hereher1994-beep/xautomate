@@ -109,13 +109,11 @@ export default function AutomationControlPanel({ account, onAccountChange }: Aut
   const [status, setStatus] = useState<AutomationStatus>('idle');
   const [cycleCount, setCycleCount] = useState(0);
   const [lastCycleTime, setLastCycleTime] = useState<string | null>(null);
-  const [nextCycleIn, setNextCycleIn] = useState<number | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>(INITIAL_LOG);
   const [isStarting, setIsStarting] = useState(false);
   const [isTesting, setIsTesting] = useState(false);
 
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const cycleCountRef = useRef(cycleCount);
   cycleCountRef.current = cycleCount;
 
@@ -249,7 +247,6 @@ export default function AutomationControlPanel({ account, onAccountChange }: Aut
           addLog('error', 'Authentication error — stopping automation. Refresh your X session cookies.');
           setStatus('error');
           if (intervalRef.current) clearInterval(intervalRef.current);
-          if (countdownRef.current) clearInterval(countdownRef.current);
           return;
         }
       }
@@ -318,7 +315,6 @@ export default function AutomationControlPanel({ account, onAccountChange }: Aut
       if (i < 9) {
         const gap = randomGap();
         addLog('info', `Phase A — post ${i + 1}/10 done. Next in ${Math.round(gap / 1000)}s…`);
-        setNextCycleIn(Math.round(gap / 1000));
         await sleep(gap);
         if (!stopRef.current) return;
       }
@@ -333,7 +329,6 @@ export default function AutomationControlPanel({ account, onAccountChange }: Aut
       if (i < 2) {
         const gap = randomGap();
         addLog('info', `Phase B — photo post ${i + 1}/3 done. Next in ${Math.round(gap / 1000)}s…`);
-        setNextCycleIn(Math.round(gap / 1000));
         await sleep(gap);
         if (!stopRef.current) return;
       }
@@ -343,7 +338,6 @@ export default function AutomationControlPanel({ account, onAccountChange }: Aut
 
     // ── 3-minute rest between B and C ─────────────────────────────────
     const restBC = 3 * 60 * 1000;
-    setNextCycleIn(3 * 60);
     await sleep(restBC);
     if (!stopRef.current) return;
 
@@ -356,7 +350,6 @@ export default function AutomationControlPanel({ account, onAccountChange }: Aut
       if (i < 19) {
         const gap = randomGap();
         addLog('info', `Phase C — post ${i + 1}/20 done. Next in ${Math.round(gap / 1000)}s…`);
-        setNextCycleIn(Math.round(gap / 1000));
         await sleep(gap);
         if (!stopRef.current) return;
       }
@@ -366,7 +359,6 @@ export default function AutomationControlPanel({ account, onAccountChange }: Aut
 
     // ── 10-minute rest, then repeat ───────────────────────────────────
     const restEnd = 10 * 60 * 1000;
-    setNextCycleIn(10 * 60);
     await sleep(restEnd);
     if (!stopRef.current) return;
 
@@ -437,11 +429,8 @@ export default function AutomationControlPanel({ account, onAccountChange }: Aut
   // ── Stop automation ────────────────────────────────────────────────
   const handleStop = useCallback(() => {
     if (intervalRef.current) clearInterval(intervalRef.current);
-    if (countdownRef.current) clearInterval(countdownRef.current);
     intervalRef.current = null;
-    countdownRef.current = null;
     setStatus('idle');
-    setNextCycleIn(null);
     addLog('warn', `Automation stopped after ${cycleCountRef.current} cycle(s).`);
     toast.info('Automation stopped', { description: `${cycleCountRef.current} cycle(s) completed this session.` });
   }, [addLog]);
@@ -450,13 +439,11 @@ export default function AutomationControlPanel({ account, onAccountChange }: Aut
   const handlePause = useCallback(() => {
     if (status === 'running') {
       if (intervalRef.current) clearInterval(intervalRef.current);
-      if (countdownRef.current) clearInterval(countdownRef.current);
       intervalRef.current = null;
       setStatus('paused');
       addLog('warn', 'Automation paused. Resume to continue cycling.');
       toast.info('Paused — automation will not fire until resumed.');
     } else if (status === 'paused') {
-      setNextCycleIn(null);
       intervalRef.current = setInterval(() => {}, 1 << 30); // sentinel
       setStatus('running');
       addLog('success', 'Automation resumed — continuing schedule.');
@@ -469,7 +456,6 @@ export default function AutomationControlPanel({ account, onAccountChange }: Aut
   useEffect(() => {
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
-      if (countdownRef.current) clearInterval(countdownRef.current);
     };
   }, []);
 
@@ -511,8 +497,6 @@ export default function AutomationControlPanel({ account, onAccountChange }: Aut
           lastCycleTime={lastCycleTime}
           targetCount={usernames.length}
           imageCount={images.length}
-          nextCycleIn={nextCycleIn}
-          intervalMinutes={intervalMinutes}
         />
 
         {/* Main Config Grid */}
