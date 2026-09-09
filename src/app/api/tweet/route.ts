@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { withProxy } from '@/lib/proxyAgent';
 
 interface TweetRequestBody {
   tweetText: string;
@@ -8,6 +9,8 @@ interface TweetRequestBody {
   // Legacy cookie-based auth (kept as fallback)
   cookieString?: string;
   ct0?: string;
+  // Per-account proxy (http/https/socks4/socks5)
+  proxy?: string;
 }
 
 /**
@@ -15,7 +18,8 @@ interface TweetRequestBody {
  */
 async function uploadMediaOAuth(
   accessToken: string,
-  imageDataUrl: string
+  imageDataUrl: string,
+  proxy?: string
 ): Promise<string | null> {
   try {
     const base64Match = imageDataUrl.match(/^data:([^;]+);base64,(.+)$/);
@@ -34,13 +38,15 @@ async function uploadMediaOAuth(
     formData.append('media', blob, 'image');
     formData.append('media_category', 'tweet_image');
 
-    const res = await fetch('https://upload.twitter.com/1.1/media/upload.json', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${accessToken}`,
-      },
-      body: formData,
-    });
+    const res = await fetch('https://upload.twitter.com/1.1/media/upload.json',
+      withProxy({
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+        },
+        body: formData,
+      }, proxy)
+    );
 
     if (!res.ok) return null;
     const data = await res.json() as { media_id_string?: string };
@@ -56,6 +62,7 @@ async function uploadMediaOAuth(
 async function postTweetWithOAuth(
   accessToken: string,
   tweetText: string,
+  proxy?: string,
   mediaId?: string
 ): Promise<{ ok: boolean; status: number; body: unknown }> {
   let payload: Record<string, unknown> = { text: tweetText };
@@ -63,14 +70,16 @@ async function postTweetWithOAuth(
     payload.media = { media_ids: [mediaId] };
   }
 
-  const res = await fetch('https://api.twitter.com/2/tweets', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${accessToken}`,
-    },
-    body: JSON.stringify(payload),
-  });
+  const res = await fetch('https://api.twitter.com/2/tweets',
+    withProxy({
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify(payload),
+    }, proxy)
+  );
 
   let body: unknown;
   try {
@@ -90,7 +99,8 @@ const X_BEARER_TOKEN =
 async function uploadMedia(
   cookieString: string,
   ct0: string,
-  imageDataUrl: string
+  imageDataUrl: string,
+  proxy?: string
 ): Promise<string | null> {
   try {
     const base64Match = imageDataUrl.match(/^data:([^;]+);base64,(.+)$/);
@@ -109,20 +119,22 @@ async function uploadMedia(
     formData.append('media', blob, 'image');
     formData.append('media_category', 'tweet_image');
 
-    const res = await fetch('https://upload.twitter.com/1.1/media/upload.json', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${X_BEARER_TOKEN}`,
-        'x-csrf-token': ct0,
-        'Cookie': cookieString,
-        'x-twitter-active-user': 'yes',
-        'x-twitter-auth-type': 'OAuth2Session',
-        'Origin': 'https://x.com',
-        'Referer': 'https://x.com/',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-      },
-      body: formData,
-    });
+    const res = await fetch('https://upload.twitter.com/1.1/media/upload.json',
+      withProxy({
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${X_BEARER_TOKEN}`,
+          'x-csrf-token': ct0,
+          'Cookie': cookieString,
+          'x-twitter-active-user': 'yes',
+          'x-twitter-auth-type': 'OAuth2Session',
+          'Origin': 'https://x.com',
+          'Referer': 'https://x.com/',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        },
+        body: formData,
+      }, proxy)
+    );
 
     if (!res.ok) return null;
     const data = await res.json() as { media_id_string?: string };
@@ -136,6 +148,7 @@ async function postTweetV1(
   cookieString: string,
   ct0: string,
   tweetText: string,
+  proxy?: string,
   mediaId?: string
 ): Promise<{ ok: boolean; status: number; body: unknown; newCt0?: string }> {
   const params = new URLSearchParams();
@@ -143,22 +156,24 @@ async function postTweetV1(
   params.set('include_entities', '1');
   if (mediaId) params.set('media_ids', mediaId);
 
-  const res = await fetch('https://api.twitter.com/1.1/statuses/update.json', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded',
-      'Authorization': `Bearer ${X_BEARER_TOKEN}`,
-      'x-csrf-token': ct0,
-      'Cookie': cookieString,
-      'x-twitter-active-user': 'yes',
-      'x-twitter-auth-type': 'OAuth2Session',
-      'x-twitter-client-language': 'en',
-      'Origin': 'https://x.com',
-      'Referer': 'https://x.com/',
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-    },
-    body: params.toString(),
-  });
+  const res = await fetch('https://api.twitter.com/1.1/statuses/update.json',
+    withProxy({
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Authorization': `Bearer ${X_BEARER_TOKEN}`,
+        'x-csrf-token': ct0,
+        'Cookie': cookieString,
+        'x-twitter-active-user': 'yes',
+        'x-twitter-auth-type': 'OAuth2Session',
+        'x-twitter-client-language': 'en',
+        'Origin': 'https://x.com',
+        'Referer': 'https://x.com/',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+      },
+      body: params.toString(),
+    }, proxy)
+  );
 
   let newCt0: string | undefined;
   const setCookieHeader = res.headers.get('set-cookie');
@@ -176,27 +191,30 @@ async function postTweetV2(
   cookieString: string,
   ct0: string,
   tweetText: string,
+  proxy?: string,
   mediaId?: string
 ): Promise<{ ok: boolean; status: number; body: unknown; newCt0?: string }> {
   let payload: Record<string, unknown> = { text: tweetText };
   if (mediaId) payload.media = { media_ids: [mediaId] };
 
-  const res = await fetch('https://api.twitter.com/2/tweets', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${X_BEARER_TOKEN}`,
-      'x-csrf-token': ct0,
-      'Cookie': cookieString,
-      'x-twitter-active-user': 'yes',
-      'x-twitter-auth-type': 'OAuth2Session',
-      'x-twitter-client-language': 'en',
-      'Origin': 'https://x.com',
-      'Referer': 'https://x.com/',
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-    },
-    body: JSON.stringify(payload),
-  });
+  const res = await fetch('https://api.twitter.com/2/tweets',
+    withProxy({
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${X_BEARER_TOKEN}`,
+        'x-csrf-token': ct0,
+        'Cookie': cookieString,
+        'x-twitter-active-user': 'yes',
+        'x-twitter-auth-type': 'OAuth2Session',
+        'x-twitter-client-language': 'en',
+        'Origin': 'https://x.com',
+        'Referer': 'https://x.com/',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+      },
+      body: JSON.stringify(payload),
+    }, proxy)
+  );
 
   let newCt0: string | undefined;
   const setCookieHeader = res.headers.get('set-cookie');
@@ -214,6 +232,7 @@ async function postTweetGraphQL(
   cookieString: string,
   ct0: string,
   tweetText: string,
+  proxy?: string,
   mediaId?: string
 ): Promise<{ ok: boolean; status: number; body: unknown; newCt0?: string }> {
   const variables: Record<string, unknown> = {
@@ -249,7 +268,7 @@ async function postTweetGraphQL(
 
   const res = await fetch(
     'https://twitter.com/i/api/graphql/SoVnbfCycZ7fERGCwpZkYA/CreateTweet',
-    {
+    withProxy({
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -264,7 +283,7 @@ async function postTweetGraphQL(
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
       },
       body: JSON.stringify({ variables, features }),
-    }
+    }, proxy)
   );
 
   let newCt0: string | undefined;
@@ -296,7 +315,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
 
-  const { tweetText, imageDataUrl, accessToken, cookieString, ct0 } = payload;
+  const { tweetText, imageDataUrl, accessToken, cookieString, ct0, proxy } = payload;
 
   if (!tweetText) {
     return NextResponse.json({ error: 'Missing required field: tweetText' }, { status: 400 });
@@ -306,10 +325,10 @@ export async function POST(req: NextRequest) {
   if (accessToken) {
     let mediaId: string | undefined;
     if (imageDataUrl) {
-      mediaId = (await uploadMediaOAuth(accessToken, imageDataUrl)) ?? undefined;
+      mediaId = (await uploadMediaOAuth(accessToken, imageDataUrl, proxy)) ?? undefined;
     }
 
-    const result = await postTweetWithOAuth(accessToken, tweetText, mediaId);
+    const result = await postTweetWithOAuth(accessToken, tweetText, proxy, mediaId);
 
     if (result.ok) {
       const data = result.body as Record<string, unknown>;
@@ -347,12 +366,12 @@ export async function POST(req: NextRequest) {
 
   let mediaId: string | undefined;
   if (imageDataUrl) {
-    mediaId = (await uploadMedia(cookieString, ct0, imageDataUrl)) ?? undefined;
+    mediaId = (await uploadMedia(cookieString, ct0, imageDataUrl, proxy)) ?? undefined;
   }
 
   // Attempt 1: v1.1
   try {
-    const v1Result = await postTweetV1(cookieString, ct0, tweetText, mediaId);
+    const v1Result = await postTweetV1(cookieString, ct0, tweetText, proxy, mediaId);
     if (v1Result.ok) {
       const data = v1Result.body as Record<string, unknown>;
       return NextResponse.json({ success: true, api: 'v1.1', tweetId: (data?.id_str as string) ?? null, mediaId: mediaId ?? null, newCt0: v1Result.newCt0 ?? null, data: v1Result.body });
@@ -366,7 +385,7 @@ export async function POST(req: NextRequest) {
 
   // Attempt 2: v2
   try {
-    const v2Result = await postTweetV2(cookieString, ct0, tweetText, mediaId);
+    const v2Result = await postTweetV2(cookieString, ct0, tweetText, proxy, mediaId);
     if (v2Result.ok) {
       const data = v2Result.body as Record<string, unknown>;
       const tweetData = data?.data as { id?: string } | undefined;
@@ -381,7 +400,7 @@ export async function POST(req: NextRequest) {
 
   // Attempt 3: GraphQL
   try {
-    const gqlResult = await postTweetGraphQL(cookieString, ct0, tweetText, mediaId);
+    const gqlResult = await postTweetGraphQL(cookieString, ct0, tweetText, proxy, mediaId);
     if (gqlResult.ok) {
       const data = gqlResult.body as Record<string, unknown>;
       let tweetId: string | null = null;

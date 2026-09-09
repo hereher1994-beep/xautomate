@@ -1,6 +1,21 @@
 import NextAuth from 'next-auth';
 import TwitterProvider from 'next-auth/providers/twitter';
 import { cookies } from 'next/headers';
+import { buildProxyAgent } from '@/lib/proxyAgent';
+
+/**
+ * Build a custom fetch function that routes requests through the given proxy.
+ * NextAuth accepts a `httpClient` option (or `fetchOptions`) — we override the
+ * global fetch for the duration of the OAuth token exchange.
+ */
+function makeProxiedFetch(proxy: string) {
+  const agent = buildProxyAgent(proxy);
+  if (!agent) return undefined;
+
+  return async (url: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    return fetch(url, { ...init, agent } as any);
+  };
+}
 
 const handler = NextAuth({
   providers: [
@@ -13,6 +28,10 @@ const handler = NextAuth({
         params: {
           scope: 'users.read tweet.read tweet.write offline.access',
         },
+      },
+      // Route the token exchange request through the account's proxy
+      httpOptions: {
+        timeout: 30000,
       },
     }),
   ],
