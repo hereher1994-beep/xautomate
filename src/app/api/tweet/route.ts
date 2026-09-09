@@ -4,52 +4,6 @@ import { NextRequest, NextResponse } from 'next/server';
 const X_BEARER_TOKEN =
   'AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA';
 
-// Known CreateTweet query IDs (X rotates these; try in order)
-const CREATE_TWEET_QUERY_IDS = [
-  '5CdvsV_zjv4L64XFifAglw',
-  'SoVnbfCycZ7fERGCwpZkYA',
-  'tTsjMKyhajZvK4q76mpIbg',
-  'a1p9RmpkLBFds-d3O44bWg',
-  '7TKRKCPuAGsmYde0CudbVg',
-];
-
-const CREATE_TWEET_FEATURES = {
-  interactive_text_enabled: true,
-  longform_notetweets_inline_media_enabled: false,
-  responsive_web_text_conversations_enabled: false,
-  tweet_with_visibility_results_prefer_gql_limited_actions_policy_enabled: false,
-  vibe_api_enabled: false,
-  rweb_lists_timeline_redesign_enabled: true,
-  responsive_web_graphql_exclude_directive_enabled: true,
-  verified_phone_label_enabled: false,
-  creator_subscriptions_tweet_preview_api_enabled: true,
-  responsive_web_graphql_timeline_navigation_enabled: true,
-  responsive_web_graphql_skip_user_profile_image_extensions_enabled: false,
-  tweetypie_unmention_optimization_enabled: true,
-  responsive_web_edit_tweet_api_enabled: true,
-  graphql_is_translatable_rweb_tweet_is_translatable_enabled: true,
-  view_counts_everywhere_api_enabled: true,
-  longform_notetweets_consumption_enabled: true,
-  tweet_awards_web_tipping_enabled: false,
-  freedom_of_speech_not_reach_fetch_enabled: true,
-  standardized_nudges_misinfo: true,
-  tweet_with_visibility_results_prefer_gql_media_interstitial_enabled: false,
-  responsive_web_enhance_cards_enabled: false,
-  longform_notetweets_rich_text_read_enabled: true,
-  longform_notetweets_inline_media_enabled_v2: false,
-  responsive_web_media_download_video_enabled: false,
-  responsive_web_twitter_article_tweet_consumption_enabled: false,
-  tweet_with_visibility_results_prefer_gql_limited_actions_policy_enabled_v2: false,
-  rweb_video_timestamps_enabled: true,
-  responsive_web_graphql_timeline_navigation_enabled_v2: true,
-  communities_web_enable_tweet_community_results_fetch: true,
-  c9s_tweet_anatomy_moderator_badge_enabled: true,
-  articles_preview_enabled: true,
-  responsive_web_edit_tweet_api_enabled_v2: true,
-  responsive_web_graphql_exclude_directive_enabled_v2: true,
-  responsive_web_graphql_skip_user_profile_image_extensions_enabled_v2: false,
-};
-
 interface TweetRequestBody {
   cookieString: string;
   ct0: string;
@@ -93,7 +47,7 @@ async function uploadMedia(
         'x-twitter-auth-type': 'OAuth2Session',
         'Origin': 'https://x.com',
         'Referer': 'https://x.com/',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
       },
       body: formData,
     });
@@ -107,31 +61,77 @@ async function uploadMedia(
   }
 }
 
-async function tryCreateTweet(
-  queryId: string,
+/**
+ * Post a tweet using X's v1.1 REST API (statuses/update).
+ * This endpoint does NOT use rotating GraphQL queryIds and is more stable.
+ */
+async function postTweetV1(
   cookieString: string,
   ct0: string,
   tweetText: string,
   mediaId?: string
 ): Promise<{ ok: boolean; status: number; body: unknown; newCt0?: string }> {
-  const variables: Record<string, unknown> = {
-    tweet_text: tweetText,
-    dark_request: false,
-    semantic_annotation_ids: [],
-  };
-
+  const params = new URLSearchParams();
+  params.set('status', tweetText);
+  params.set('include_entities', '1');
   if (mediaId) {
-    variables.media = {
-      media_entities: [{ media_id: mediaId, tagged_users: [] }],
-      possibly_sensitive: false,
-    };
-  } else {
-    variables.media = { media_entities: [], possibly_sensitive: false };
+    params.set('media_ids', mediaId);
   }
 
-  const url = `https://x.com/i/api/graphql/${queryId}/CreateTweet`;
+  const res = await fetch('https://api.twitter.com/1.1/statuses/update.json', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'Authorization': `Bearer ${X_BEARER_TOKEN}`,
+      'x-csrf-token': ct0,
+      'Cookie': cookieString,
+      'x-twitter-active-user': 'yes',
+      'x-twitter-auth-type': 'OAuth2Session',
+      'x-twitter-client-language': 'en',
+      'Origin': 'https://x.com',
+      'Referer': 'https://x.com/',
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+      'Accept': '*/*',
+      'Accept-Language': 'en-US,en;q=0.9',
+    },
+    body: params.toString(),
+  });
 
-  const res = await fetch(url, {
+  // Capture rotated ct0 from response Set-Cookie header if present
+  let newCt0: string | undefined;
+  const setCookieHeader = res.headers.get('set-cookie');
+  if (setCookieHeader) {
+    const ct0Match = setCookieHeader.match(/(?:^|,\s*)ct0=([^;,]+)/i);
+    if (ct0Match) {
+      newCt0 = ct0Match[1];
+    }
+  }
+
+  let body: unknown;
+  try {
+    body = await res.json();
+  } catch {
+    body = await res.text().catch(() => '(no body)');
+  }
+
+  return { ok: res.ok, status: res.status, body, newCt0 };
+}
+
+/**
+ * Fallback: post tweet using X's v2 REST API (tweets endpoint).
+ */
+async function postTweetV2(
+  cookieString: string,
+  ct0: string,
+  tweetText: string,
+  mediaId?: string
+): Promise<{ ok: boolean; status: number; body: unknown; newCt0?: string }> {
+  let payload: Record<string, unknown> = { text: tweetText };
+  if (mediaId) {
+    payload.media = { media_ids: [mediaId] };
+  }
+
+  const res = await fetch('https://api.twitter.com/2/tweets', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -143,15 +143,11 @@ async function tryCreateTweet(
       'x-twitter-client-language': 'en',
       'Origin': 'https://x.com',
       'Referer': 'https://x.com/',
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
       'Accept': '*/*',
       'Accept-Language': 'en-US,en;q=0.9',
     },
-    body: JSON.stringify({
-      variables,
-      features: CREATE_TWEET_FEATURES,
-      queryId,
-    }),
+    body: JSON.stringify(payload),
   });
 
   // Capture rotated ct0 from response Set-Cookie header if present
@@ -197,56 +193,80 @@ export async function POST(req: NextRequest) {
     mediaId = (await uploadMedia(cookieString, ct0, imageDataUrl)) ?? undefined;
   }
 
-  // Try each known query ID in order until one succeeds
-  const errors: { queryId: string; status: number; body: unknown }[] = [];
+  // ── Attempt 1: v1.1 REST API (statuses/update) ────────────────────
+  try {
+    const v1Result = await postTweetV1(cookieString, ct0, tweetText, mediaId);
 
-  for (const queryId of CREATE_TWEET_QUERY_IDS) {
-    try {
-      const result = await tryCreateTweet(queryId, cookieString, ct0, tweetText, mediaId);
-
-      if (result.ok) {
-        const data = result.body as Record<string, unknown>;
-        if (data?.errors && Array.isArray(data.errors) && data.errors.length > 0) {
-          errors.push({ queryId, status: result.status, body: result.body });
-          continue;
-        }
-        return NextResponse.json({
-          success: true,
-          queryId,
-          mediaId: mediaId ?? null,
-          // Return the new ct0 if X rotated it, so the client can save it back
-          newCt0: result.newCt0 ?? null,
-          data: result.body,
-        });
-      }
-
-      if (result.status === 403 || result.status === 401) {
-        return NextResponse.json(
-          {
-            error: `Authentication failed (HTTP ${result.status}). Your cookies may be expired or invalid.`,
-            status: result.status,
-            detail: result.body,
-          },
-          { status: result.status }
-        );
-      }
-
-      if (result.status === 404) {
-        errors.push({ queryId, status: result.status, body: result.body });
-        continue;
-      }
-
-      errors.push({ queryId, status: result.status, body: result.body });
-    } catch (err) {
-      errors.push({ queryId, status: 0, body: String(err) });
+    if (v1Result.ok) {
+      const data = v1Result.body as Record<string, unknown>;
+      const tweetId = (data?.id_str as string) ?? null;
+      return NextResponse.json({
+        success: true,
+        api: 'v1.1',
+        tweetId,
+        mediaId: mediaId ?? null,
+        newCt0: v1Result.newCt0 ?? null,
+        data: v1Result.body,
+      });
     }
+
+    // Hard auth failure — no point trying v2
+    if (v1Result.status === 401 || v1Result.status === 403) {
+      return NextResponse.json(
+        {
+          error: `Authentication failed (HTTP ${v1Result.status}). Your cookies may be expired or invalid.`,
+          status: v1Result.status,
+          detail: v1Result.body,
+        },
+        { status: v1Result.status }
+      );
+    }
+  } catch (err) {
+    // v1.1 threw — fall through to v2
+    console.error('[tweet/route] v1.1 threw:', err);
   }
 
-  return NextResponse.json(
-    {
-      error: 'All CreateTweet query IDs failed. X may have rotated the queryId or your session is invalid.',
-      attempts: errors,
-    },
-    { status: 502 }
-  );
+  // ── Attempt 2: v2 REST API (tweets) ──────────────────────────────
+  try {
+    const v2Result = await postTweetV2(cookieString, ct0, tweetText, mediaId);
+
+    if (v2Result.ok) {
+      const data = v2Result.body as Record<string, unknown>;
+      const tweetData = data?.data as { id?: string } | undefined;
+      const tweetId = tweetData?.id ?? null;
+      return NextResponse.json({
+        success: true,
+        api: 'v2',
+        tweetId,
+        mediaId: mediaId ?? null,
+        newCt0: v2Result.newCt0 ?? null,
+        data: v2Result.body,
+      });
+    }
+
+    if (v2Result.status === 401 || v2Result.status === 403) {
+      return NextResponse.json(
+        {
+          error: `Authentication failed (HTTP ${v2Result.status}). Your cookies may be expired or invalid.`,
+          status: v2Result.status,
+          detail: v2Result.body,
+        },
+        { status: v2Result.status }
+      );
+    }
+
+    return NextResponse.json(
+      {
+        error: `Tweet failed (HTTP ${v2Result.status}). Check your session cookies and try again.`,
+        status: v2Result.status,
+        detail: v2Result.body,
+      },
+      { status: 502 }
+    );
+  } catch (err) {
+    return NextResponse.json(
+      { error: `Tweet request failed: ${String(err)}` },
+      { status: 502 }
+    );
+  }
 }
