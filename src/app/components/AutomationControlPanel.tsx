@@ -231,8 +231,7 @@ export default function AutomationControlPanel({ account, onAccountChange }: Aut
       const data = await res.json() as Record<string, unknown>;
 
       if (res.ok && data.success) {
-        const tweetData = data.data as { data?: { create_tweet?: { tweet_results?: { result?: { rest_id?: string } } } } } | undefined;
-        const tweetId = tweetData?.data?.create_tweet?.tweet_results?.result?.rest_id;
+        const tweetId = (data.tweetId as string) ?? null;
         const mediaNote = data.mediaId ? ` + image "${chosenImageName}"` : '';
         const usersNote = pickedUsernames.length > 0 ? ` — tagged: ${pickedUsernames.map(u => `@${u}`).join(', ')}` : '';
         addLog('success', `✓ Tweet sent${mediaNote}${tweetId ? ` (ID: ${tweetId})` : ''}${usersNote}`);
