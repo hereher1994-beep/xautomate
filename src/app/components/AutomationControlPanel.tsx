@@ -2,23 +2,23 @@
 
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { Toaster, toast } from 'sonner';
+import { useSession } from 'next-auth/react';
 import StatusBar from './StatusBar';
 import ProxyConfigCard from './ProxyConfigCard';
-import SessionCookiesCard from './SessionCookiesCard';
+import TwitterLoginCard from './TwitterLoginCard';
 import ContextTemplateCard from './ContextTemplateCard';
 import UsernameListManager from './UsernameListManager';
 import ImageAttachmentManager from './ImageAttachmentManager';
 import CycleControlCard from './CycleControlCard';
 import ActivityLog from './ActivityLog';
 import type { AutomationStatus, LogEntry, AccountConfig, ImageAttachment } from '../types/automation';
-import { parseCookieJson } from '../types/automation';
 
 const INITIAL_LOG: LogEntry[] = [
   {
     id: 'log-init-001',
     timestamp: '2026-09-06 14:23:20',
     level: 'info',
-    message: 'XAutomate initialized. Configure settings and press Start to begin.',
+    message: 'XAutomate initialized. Sign in with X and press Start to begin.',
   },
 ];
 
@@ -28,9 +28,11 @@ interface AutomationControlPanelProps {
 }
 
 export default function AutomationControlPanel({ account, onAccountChange }: AutomationControlPanelProps) {
+  const { data: session } = useSession();
+  const accessToken = (session as any)?.accessToken as string | undefined;
+
   // ── Core config state — seeded from account prop if provided ───────
   const [proxy, setProxyState] = useState(account?.proxy ?? '');
-  const [cookies, setCookiesState] = useState(account?.cookies ?? '');
   const [context, setContextState] = useState(account?.context ?? '');
   const [usernames, setUsernamesState] = useState<string[]>(
     account?.usernames ?? ['elonmusk', 'sama', 'karpathy', 'naval', 'paulg']
@@ -42,15 +44,14 @@ export default function AutomationControlPanel({ account, onAccountChange }: Aut
   // ── localStorage key (per-account or global) ──────────────────────
   const lsKey = account ? `xautomate_state_${account.id}` : 'xautomate_state_default';
 
-  // ── Load from localStorage on mount (if no account prop) ──────────
+  // ── Load from localStorage on mount ───────────────────────────────
   useEffect(() => {
-    if (account) return; // account prop takes priority
+    if (account) return;
     try {
       const raw = localStorage.getItem(lsKey);
       if (!raw) return;
       const saved = JSON.parse(raw);
       if (saved.proxy !== undefined) setProxyState(saved.proxy);
-      if (saved.cookies !== undefined) setCookiesState(saved.cookies);
       if (saved.context !== undefined) setContextState(saved.context);
       if (Array.isArray(saved.usernames)) setUsernamesState(saved.usernames);
       if (Array.isArray(saved.images)) setImagesState(saved.images);
@@ -62,7 +63,7 @@ export default function AutomationControlPanel({ account, onAccountChange }: Aut
 
   // ── Persist to localStorage + notify parent on every change ───────
   const persistState = useCallback((patch: Partial<{
-    proxy: string; cookies: string; context: string;
+    proxy: string; context: string;
     usernames: string[]; images: ImageAttachment[];
     intervalMinutes: number; usernamesPerTweet: number;
   }>) => {
@@ -73,24 +74,8 @@ export default function AutomationControlPanel({ account, onAccountChange }: Aut
       const merged = { ...current, ...patch };
       localStorage.setItem(lsKey, JSON.stringify(merged));
 
-      // Also update ct0 inside cookies JSON if it changed
-      if (patch.cookies !== undefined && account) {
-        const updatedAccount: AccountConfig = {
-          ...account,
-          proxy: patch.proxy ?? current.proxy ?? account.proxy,
-          cookies: patch.cookies,
-          context: patch.context ?? current.context ?? account.context,
-          usernames: patch.usernames ?? current.usernames ?? account.usernames,
-          images: patch.images ?? current.images ?? account.images,
-          intervalMinutes: patch.intervalMinutes ?? current.intervalMinutes ?? account.intervalMinutes,
-          usernamesPerTweet: patch.usernamesPerTweet ?? current.usernamesPerTweet ?? account.usernamesPerTweet,
-        };
-        onAccountChange?.(updatedAccount);
-      } else if (account) {
-        const updatedAccount: AccountConfig = {
-          ...account,
-          ...patch,
-        };
+      if (account) {
+        const updatedAccount: AccountConfig = { ...account, ...patch };
         onAccountChange?.(updatedAccount);
       }
     } catch { /* ignore */ }
@@ -98,7 +83,6 @@ export default function AutomationControlPanel({ account, onAccountChange }: Aut
 
   // ── Setters that auto-save ─────────────────────────────────────────
   const setProxy = useCallback((v: string) => { setProxyState(v); persistState({ proxy: v }); }, [persistState]);
-  const setCookies = useCallback((v: string) => { setCookiesState(v); persistState({ cookies: v }); }, [persistState]);
   const setContext = useCallback((v: string) => { setContextState(v); persistState({ context: v }); }, [persistState]);
   const setUsernames = useCallback((v: string[]) => { setUsernamesState(v); persistState({ usernames: v }); }, [persistState]);
   const setImages = useCallback((v: ImageAttachment[]) => { setImagesState(v); persistState({ images: v }); }, [persistState]);
@@ -118,7 +102,6 @@ export default function AutomationControlPanel({ account, onAccountChange }: Aut
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const cycleCountRef = useRef(cycleCount);
   cycleCountRef.current = cycleCount;
-  // Track consecutive auth failures — only stop after 3 in a row
   const consecutiveAuthFailuresRef = useRef(0);
 
   // ── Live refs so fireCycle always reads current state ──────────────
@@ -130,8 +113,8 @@ export default function AutomationControlPanel({ account, onAccountChange }: Aut
   usernamesPerTweetRef.current = usernamesPerTweet;
   const contextRef = useRef(context);
   contextRef.current = context;
-  const cookiesRef = useRef(cookies);
-  cookiesRef.current = cookies;
+  const accessTokenRef = useRef(accessToken);
+  accessTokenRef.current = accessToken;
 
   // ── Log helper ─────────────────────────────────────────────────────
   const addLog = useCallback((level: LogEntry['level'], message: string) => {
@@ -140,53 +123,6 @@ export default function AutomationControlPanel({ account, onAccountChange }: Aut
     const timestamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
     const id = `log-${Date.now()}-${Math.floor(cycleCountRef.current * 100)}`;
     setLogs(prev => [{ id, timestamp, level, message }, ...prev].slice(0, 200));
-  }, []);
-
-  // ── ct0 rotation: update cookies JSON with new ct0 value ──────────
-  const rotateCt0 = useCallback((newCt0: string) => {
-    const currentCookies = cookiesRef.current;
-    try {
-      const parsed = JSON.parse(currentCookies);
-      if (!Array.isArray(parsed)) return;
-      const updated = parsed.map((c: { name: string; value: string }) =>
-        c.name === 'ct0' ? { ...c, value: newCt0 } : c
-      );
-      const newJson = JSON.stringify(updated, null, 2);
-      setCookies(newJson);
-      addLog('info', `ct0 CSRF token rotated and saved to localStorage.`);
-    } catch { /* ignore */ }
-  }, [setCookies, addLog]);
-
-  // ── Cookie validity check — warns user if cookies look expired ────
-  const validateCookies = useCallback((rawCookies: string): { valid: boolean; warning?: string } => {
-    if (!rawCookies.trim()) {
-      return { valid: false, warning: 'No cookies found. Paste your X session cookies JSON first.' };
-    }
-    const parsed = parseCookieJson(rawCookies);
-    if (parsed.count === 0) {
-      return { valid: false, warning: 'Could not parse cookies. Paste the JSON array from Cookie-Editor → Export → JSON.' };
-    }
-    if (!parsed.hasAuthToken) {
-      return { valid: false, warning: 'auth_token is missing from your cookies. Re-export cookies from Cookie-Editor while logged in to X.' };
-    }
-    if (!parsed.hasCt0) {
-      return { valid: false, warning: 'ct0 CSRF token is missing. Re-export cookies from Cookie-Editor while logged in to X.' };
-    }
-    const authTokenValue = parsed.pairs['auth_token'] ?? '';
-    if (!authTokenValue || authTokenValue.trim() === '') {
-      return {
-        valid: false,
-        warning: '⚠️ Your auth_token cookie appears to be empty — your X session has likely expired. Please log in to X, re-export cookies via Cookie-Editor, and paste them here.',
-      };
-    }
-    const ct0Value = parsed.pairs['ct0'] ?? '';
-    if (!ct0Value || ct0Value.trim() === '') {
-      return {
-        valid: false,
-        warning: '⚠️ Your ct0 CSRF token is empty — your X session may have expired. Please refresh your X session and re-export cookies.',
-      };
-    }
-    return { valid: true };
   }, []);
 
   // ── Fire a real tweet cycle ────────────────────────────────────────
@@ -199,23 +135,18 @@ export default function AutomationControlPanel({ account, onAccountChange }: Aut
     const ts = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
     setLastCycleTime(ts);
 
-    // ── Step 1: Read all current values via refs ──────────────────────
-    const currentCookies = cookiesRef.current;
+    const currentAccessToken = accessTokenRef.current;
     const currentImages = imagesRef.current;
     const currentUsernames = usernamesRef.current;
     const currentUsernamesPerTweet = usernamesPerTweetRef.current;
     const currentContext = contextRef.current;
 
-    // ── Step 2: Parse cookies ─────────────────────────────────────────
-    const parsed = parseCookieJson(currentCookies);
-    const ct0 = parsed.pairs['ct0'] ?? '';
-
-    if (!parsed.hasAuthToken || !ct0) {
-      addLog('error', `Cycle #${newCount} aborted — missing auth_token or ct0 in cookies.`);
+    if (!currentAccessToken) {
+      addLog('error', `Cycle #${newCount} aborted — not signed in with X. Please sign in first.`);
       return;
     }
 
-    // ── Step 3: Pick random image — already stored as base64 data URL ─
+    // ── Pick random image ─────────────────────────────────────────────
     let imageDataUrl: string | undefined;
     let chosenImageName: string | undefined;
     if (currentImages.length > 0) {
@@ -230,17 +161,15 @@ export default function AutomationControlPanel({ account, onAccountChange }: Aut
       }
     }
 
-    // ── Step 4: Pick N random usernames and build mention suffix ──────
+    // ── Pick N random usernames ───────────────────────────────────────
     const pickCount = Math.min(currentUsernamesPerTweet, currentUsernames.length);
     const shuffled = [...currentUsernames].sort(() => Math.random() - 0.5);
     const pickedUsernames = pickCount > 0 ? shuffled.slice(0, pickCount) : [];
     const mentionSuffix = pickedUsernames.map(u => ` @${u.replace(/^@/, '')}`).join('');
 
-    // ── Step 5: Build final tweet text ────────────────────────────────
+    // ── Build tweet text ──────────────────────────────────────────────
     const baseText = currentContext.trim();
-    const tweetText = baseText
-      ? `${baseText}${mentionSuffix}`
-      : mentionSuffix.trim();
+    const tweetText = baseText ? `${baseText}${mentionSuffix}` : mentionSuffix.trim();
 
     addLog('info', `Cycle #${newCount} — tweet ready: "${tweetText.slice(0, 80)}${tweetText.length > 80 ? '...' : ''}" (${tweetText.length} chars)${imageDataUrl ? ' + image' : ''}`);
 
@@ -249,14 +178,13 @@ export default function AutomationControlPanel({ account, onAccountChange }: Aut
       return;
     }
 
-    // ── Step 6: Fire the tweet ────────────────────────────────────────
+    // ── Fire the tweet ────────────────────────────────────────────────
     try {
       const res = await fetch('/api/tweet', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          cookieString: parsed.headerString,
-          ct0,
+          accessToken: currentAccessToken,
           tweetText,
           ...(imageDataUrl ? { imageDataUrl } : {}),
         }),
@@ -269,13 +197,7 @@ export default function AutomationControlPanel({ account, onAccountChange }: Aut
         const mediaNote = data.mediaId ? ` + image "${chosenImageName}"` : '';
         const usersNote = pickedUsernames.length > 0 ? ` — tagged: ${pickedUsernames.map(u => `@${u}`).join(', ')}` : '';
         addLog('success', `✓ Tweet sent${mediaNote}${tweetId ? ` (ID: ${tweetId})` : ''}${usersNote}`);
-        // Reset auth failure counter on success
         consecutiveAuthFailuresRef.current = 0;
-
-        // ── ct0 rotation: save new token if X rotated it ──────────────
-        if (data.newCt0 && typeof data.newCt0 === 'string' && data.newCt0 !== ct0) {
-          rotateCt0(data.newCt0);
-        }
       } else {
         const errMsg = (data.error as string) ?? `HTTP ${res.status}`;
         addLog('error', `✗ Tweet failed: ${errMsg}`);
@@ -284,30 +206,14 @@ export default function AutomationControlPanel({ account, onAccountChange }: Aut
           consecutiveAuthFailuresRef.current += 1;
           const failCount = consecutiveAuthFailuresRef.current;
 
-          // Re-read cookies from localStorage in case user just pasted fresh ones
-          let freshCookieRaw = cookiesRef.current;
-          try {
-            const lsRaw = localStorage.getItem(lsKey);
-            if (lsRaw) {
-              const lsParsed = JSON.parse(lsRaw);
-              if (lsParsed?.cookies && typeof lsParsed.cookies === 'string' && lsParsed.cookies.trim()) {
-                freshCookieRaw = lsParsed.cookies;
-                if (freshCookieRaw !== cookiesRef.current) {
-                  setCookies(freshCookieRaw);
-                  addLog('info', `Auth failure #${failCount} — reloaded fresh cookies from storage.`);
-                }
-              }
-            }
-          } catch { /* ignore */ }
-
           if (failCount >= 3) {
-            addLog('error', `Authentication error after ${failCount} consecutive failures — stopping automation. Paste fresh X session cookies and restart.`);
+            addLog('error', `OAuth token expired after ${failCount} consecutive failures — stopping automation. Please sign out and sign in again.`);
             setStatus('error');
             if (intervalRef.current) clearInterval(intervalRef.current);
             if (countdownRef.current) clearInterval(countdownRef.current);
             consecutiveAuthFailuresRef.current = 0;
           } else {
-            addLog('warn', `Auth failure #${failCount}/3 — automation continues. If you just pasted new cookies, the next cycle will use them.`);
+            addLog('warn', `Auth failure #${failCount}/3 — automation continues.`);
           }
           return;
         }
@@ -317,37 +223,19 @@ export default function AutomationControlPanel({ account, onAccountChange }: Aut
     }
 
     addLog('success', `Cycle #${newCount} complete.`);
+  }, [addLog]);
 
-  }, [addLog, rotateCt0]);
-
-  // ── Test Tweet — fire one tweet immediately to validate config ─────
+  // ── Test Tweet ─────────────────────────────────────────────────────
   const handleTestTweet = useCallback(async () => {
-    const currentCookies = cookiesRef.current;
+    const currentAccessToken = accessTokenRef.current;
     const currentContext = contextRef.current;
 
-    if (!currentCookies.trim()) {
-      toast.error('Session cookies required', { description: 'Paste your X session cookies JSON before testing.' });
+    if (!currentAccessToken) {
+      toast.error('Not signed in', { description: 'Please sign in with X before testing.' });
       return;
     }
     if (!currentContext.trim()) {
       toast.error('Context template empty', { description: 'Add a context/message template before testing.' });
-      return;
-    }
-
-    // ── Cookie validity check ─────────────────────────────────────────
-    const cookieCheck = validateCookies(currentCookies);
-    if (!cookieCheck.valid) {
-      toast.error('Cookies invalid or expired', {
-        description: cookieCheck.warning,
-        duration: 8000,
-      });
-      addLog('error', `⚠️ Cookie validation failed: ${cookieCheck.warning}`);
-      return;
-    }
-
-    const parsed = parseCookieJson(currentCookies);
-    if (!parsed.hasAuthToken || !parsed.hasCt0) {
-      toast.error('Missing auth_token or ct0', { description: 'Make sure your cookies include auth_token and ct0.' });
       return;
     }
 
@@ -364,12 +252,12 @@ export default function AutomationControlPanel({ account, onAccountChange }: Aut
     } finally {
       setIsTesting(false);
     }
-  }, [addLog, fireCycle, validateCookies]);
+  }, [addLog, fireCycle]);
 
   // ── Start automation ───────────────────────────────────────────────
   const handleStart = useCallback(async () => {
-    if (!cookies.trim()) {
-      toast.error('Session cookies required', { description: 'Paste your X session cookies JSON before starting.' });
+    if (!accessToken) {
+      toast.error('Not signed in', { description: 'Please sign in with X before starting automation.' });
       return;
     }
     if (usernames.length === 0) {
@@ -381,46 +269,17 @@ export default function AutomationControlPanel({ account, onAccountChange }: Aut
       return;
     }
 
-    // ── Cookie validity check ─────────────────────────────────────────
-    const cookieCheck = validateCookies(cookies);
-    if (!cookieCheck.valid) {
-      toast.error('Cookies invalid or expired', {
-        description: cookieCheck.warning,
-        duration: 8000,
-      });
-      addLog('error', `⚠️ Cookie validation failed — automation blocked: ${cookieCheck.warning}`);
-      return;
-    }
-
-    const parsed = parseCookieJson(cookies);
-    if (parsed.count === 0) {
-      toast.error('Invalid cookie format', { description: 'Could not parse any cookies. Paste the JSON array from Cookie-Editor → Export → JSON.' });
-      return;
-    }
-    if (!parsed.hasAuthToken || !parsed.hasCt0) {
-      toast.warning('Incomplete cookies', {
-        description: `Missing ${[!parsed.hasAuthToken && 'auth_token', !parsed.hasCt0 && 'ct0'].filter(Boolean).join(', ')}. Authentication may fail.`,
-      });
-    }
-
     setIsStarting(true);
     addLog('info', 'Validating configuration...');
-
     await new Promise(r => setTimeout(r, 1200));
 
     if (proxy.trim()) {
       addLog('info', `Proxy configured: ${proxy.replace(/:.+@/, ':***@')}`);
     } else {
-      addLog('warn', 'No proxy set — using direct connection. Consider adding a proxy for safety.');
+      addLog('warn', 'No proxy set — using direct connection.');
     }
 
-    const authFields = [
-      parsed.hasAuthToken && 'auth_token',
-      parsed.hasCt0 && 'ct0',
-      parsed.hasTwid && 'twid',
-    ].filter(Boolean);
-    addLog('info', `Cookies parsed: ${parsed.count} pairs found. Auth fields: [${authFields.join(', ') || 'none'}].`);
-    addLog('info', `Cookie header ready — ${parsed.headerString.length} chars, ${parsed.count} key(s).`);
+    addLog('info', `OAuth 2.0 token active — authenticated as ${session?.user?.name ?? 'unknown'}`);
     addLog('info', `Context template: "${context.slice(0, 60)}${context.length > 60 ? '...' : ''}"`);
     addLog('success', `Automation started — ${usernames.length} targets (${usernamesPerTweet} tagged per tweet), ${intervalMinutes}m interval.`);
 
@@ -445,7 +304,7 @@ export default function AutomationControlPanel({ account, onAccountChange }: Aut
         return prev - 1;
       });
     }, 1000);
-  }, [cookies, usernames, context, proxy, intervalMinutes, usernamesPerTweet, addLog, fireCycle, validateCookies]);
+  }, [accessToken, usernames, context, proxy, intervalMinutes, usernamesPerTweet, addLog, fireCycle, session]);
 
   // ── Stop automation ────────────────────────────────────────────────
   const handleStop = useCallback(() => {
@@ -538,16 +397,15 @@ export default function AutomationControlPanel({ account, onAccountChange }: Aut
         {/* Main Config Grid */}
         <div className="mt-5 grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-5 gap-4">
 
-          {/* Left column — proxy + cookies + context */}
+          {/* Left column — twitter login + proxy + context */}
           <div className="lg:col-span-1 xl:col-span-2 flex flex-col gap-4">
+            <TwitterLoginCard
+              session={session}
+              isRunning={status === 'running'}
+            />
             <ProxyConfigCard
               value={proxy}
               onChange={setProxy}
-              isRunning={status === 'running'}
-            />
-            <SessionCookiesCard
-              value={cookies}
-              onChange={setCookies}
               isRunning={status === 'running'}
             />
             <ContextTemplateCard

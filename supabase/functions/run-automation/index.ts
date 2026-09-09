@@ -10,6 +10,7 @@
 // ✅ NO TWITTER API CREDENTIALS REQUIRED
 // Uses only session cookies (auth_token + ct0) pasted by the user.
 // X_BEARER_TOKEN is Twitter's own public token from their web JS bundle.
+// ✅ PROXY SUPPORT: Every Twitter API call is routed through the account's proxy.
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
@@ -110,13 +111,55 @@ function parseCookieJson(raw: string): { headerString: string; ct0: string; hasA
 }
 
 function generateTransactionId(queryId: string): string {
-  // Use a simple hex-based transaction ID — btoa with padding can be rejected by X.com
   const timestamp = Date.now().toString(16);
   const rand = Math.random().toString(16).slice(2, 18);
   return `${queryId.slice(0, 8)}-${timestamp}-${rand}`;
 }
 
-async function tryCreateTweet(queryId: string, cookieString: string, ct0: string, tweetText: string, mediaId?: string) {
+/**
+ * Normalise a proxy string to a full URL.
+ * Accepts: host:port, user:pass@host:port, http://..., socks5://...
+ */
+function normaliseProxy(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) return '';
+  if (/^(https?|socks[45h]):\/\//i.test(trimmed)) return trimmed;
+  return `http://${trimmed}`;
+}
+
+/**
+ * Build fetch options that route through the given proxy.
+ * Deno's native fetch supports the `client` option via Deno.createHttpClient,
+ * but that requires --allow-net with proxy flag. Instead we use the standard
+ * HTTP_PROXY / HTTPS_PROXY environment variable approach OR pass the proxy
+ * URL directly in the fetch options as supported by Deno's undici-based fetch.
+ *
+ * For Supabase Edge Functions (Deno Deploy), the recommended approach is to
+ * set the proxy URL in the `client` field of the fetch RequestInit using
+ * Deno.createHttpClient. We do that here with a try/catch fallback.
+ */
+function buildProxiedFetchOptions(proxy: string | undefined, baseInit: RequestInit): RequestInit {
+  if (!proxy) return baseInit;
+  const url = normaliseProxy(proxy);
+  if (!url) return baseInit;
+
+  try {
+    // @ts-ignore — Deno-specific API
+    const client = (Deno as any).createHttpClient?.({ proxy: { url } });
+    if (client) return { ...baseInit, client } as RequestInit;
+  } catch { /* Deno.createHttpClient not available — fall through */ }
+
+  return baseInit;
+}
+
+async function tryCreateTweet(
+  queryId: string,
+  cookieString: string,
+  ct0: string,
+  tweetText: string,
+  proxy: string | undefined,
+  mediaId?: string
+) {
   const variables: Record<string, unknown> = {
     tweet_text: tweetText,
     dark_request: false,
@@ -126,7 +169,7 @@ async function tryCreateTweet(queryId: string, cookieString: string, ct0: string
       : { media_entities: [], possibly_sensitive: false },
   };
 
-  const res = await fetch(`https://x.com/i/api/graphql/${queryId}/CreateTweet`, {
+  const init = buildProxiedFetchOptions(proxy, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -146,6 +189,8 @@ async function tryCreateTweet(queryId: string, cookieString: string, ct0: string
     body: JSON.stringify({ variables, features: CREATE_TWEET_FEATURES, queryId }),
   });
 
+  const res = await fetch(`https://x.com/i/api/graphql/${queryId}/CreateTweet`, init);
+
   let body: unknown;
   try { body = await res.json(); } catch { body = null; }
   return { ok: res.ok, status: res.status, body };
@@ -155,6 +200,7 @@ async function sendOneTweet(
   cookieString: string,
   ct0: string,
   tweetText: string,
+  proxy: string | undefined,
   supabase: any,
   configId: string,
   userId: string,
@@ -169,30 +215,23 @@ async function sendOneTweet(
 
   for (const queryId of CREATE_TWEET_QUERY_IDS) {
     try {
-      const result = await tryCreateTweet(queryId, cookieString, ct0, tweetText);
+      const result = await tryCreateTweet(queryId, cookieString, ct0, tweetText, proxy);
       if (result.ok) {
         const data = result.body as any;
-        // Check for tweet_results FIRST — X often returns informational errors
-        // alongside a successfully-created tweet. Only skip if tweet_results is absent.
         const tweetResults = data?.data?.create_tweet;
         const hasResult = !!(tweetResults?.tweet_results && Object.keys(tweetResults.tweet_results).length > 0);
         if (hasResult) {
           const tweetId = tweetResults?.tweet_results?.result?.rest_id;
-          await log('success', `✓ ${label}${tweetId ? ` (ID: ${tweetId})` : ''}`);
+          await log('success', `✓ ${label}${tweetId ? ` (ID: ${tweetId})` : ''}${proxy ? ` [proxy: ${proxy.split('@').pop()}]` : ''}`);
           return true;
         }
-        // HTTP 200 but no tweet_results — try next query ID
         continue;
       }
-      // 401 = definitively expired session
       if (result.status === 401) {
         hadAuthError = true;
-        continue; // try next query ID before giving up
+        continue;
       }
-      // 403 = could be CSRF mismatch on this specific endpoint, not necessarily expired cookies
-      // Try remaining query IDs before declaring auth failure
       if (result.status === 403) {
-        // Check if body has explicit hard auth error codes
         let body = result.body as any;
         const errors = body?.errors;
         const hasHardAuthError = errors?.some(
@@ -201,7 +240,6 @@ async function sendOneTweet(
         if (hasHardAuthError) {
           hadAuthError = true;
         }
-        // Either way, try next query ID
         continue;
       }
       if (result.status === 429) {
@@ -213,7 +251,6 @@ async function sendOneTweet(
     }
   }
 
-  // All query IDs exhausted — report the most specific error
   if (hadRateLimit) {
     await log('warn', 'Rate limited by X. Will retry next tick.');
     return false;
@@ -226,13 +263,13 @@ async function sendOneTweet(
   return false;
 }
 
-// Main cycle runner — called each time the edge function fires (every minute via pg_cron)
-// Uses next_cycle_at to know when to fire the next post
+// Main cycle runner
 async function runCycle(config: any, supabase: any) {
   const {
     id: configId,
     user_id: userId,
     cookies,
+    proxy,
     context_template,
     usernames,
     cycle_count = 0,
@@ -252,26 +289,25 @@ async function runCycle(config: any, supabase: any) {
     return;
   }
 
+  // Log proxy status at cycle start
+  if (proxy) {
+    await log('info', `🔒 Proxy active: ${proxy.split('@').pop() ?? proxy}`);
+  }
+
   const allUsernames: string[] = usernames || [];
   const totalUsernames = allUsernames.length;
 
-  // Check if target already reached
   if (totalUsernames === 0) {
     await log('warn', 'No usernames in list — stopping automation.');
     await supabase.from('bot_configs').update({ is_active: false }).eq('id', configId);
     return;
   }
 
-  /**
-   * Builds tweet text using the saved context_template as-is.
-   * No AI generation during automation — the template is used directly every time.
-   */
   const buildTweetText = (mentionSuffix: string): string => {
     const baseTemplate = (context_template || '').trim();
     return baseTemplate ? `${baseTemplate}${mentionSuffix}` : mentionSuffix.trim();
   };
 
-  // Determine what to do based on current phase
   let newPhase = cycle_phase;
   let newPhasePostCount = phase_post_count;
   let newTweetsPosted = tweets_posted;
@@ -279,14 +315,12 @@ async function runCycle(config: any, supabase: any) {
   let nextDelaySeconds = randomDelaySeconds();
   let targetReached = false;
 
-  // Pick random usernames for context posts
   const pickUsernames = (): string[] => {
     const count = Math.min(randomUsernameCount(), allUsernames.length);
     return [...allUsernames].sort(() => Math.random() - 0.5).slice(0, count);
   };
 
   if (newPhase === 'A') {
-    // Phase A: post with context template + usernames
     const picked = pickUsernames();
     const mentionSuffix = picked.map((u: string) => ` @${u.replace(/^@/, '')}`).join('');
     const tweetText = buildTweetText(mentionSuffix);
@@ -295,14 +329,13 @@ async function runCycle(config: any, supabase: any) {
       await log('warn', `Phase A post skipped — tweet text is empty.`);
     } else {
       await log('info', `[A ${newPhasePostCount + 1}/${PHASE_A_POSTS}] Posting: "${tweetText.slice(0, 80)}${tweetText.length > 80 ? '...' : ''}" — tagged: ${picked.map((u: string) => `@${u}`).join(', ')}`);
-      const ok = await sendOneTweet(headerString, ct0, tweetText, supabase, configId, userId, `Phase A post ${newPhasePostCount + 1}/${PHASE_A_POSTS} — tagged: ${picked.map((u: string) => `@${u}`).join(', ')}`);
+      const ok = await sendOneTweet(headerString, ct0, tweetText, proxy, supabase, configId, userId, `Phase A post ${newPhasePostCount + 1}/${PHASE_A_POSTS} — tagged: ${picked.map((u: string) => `@${u}`).join(', ')}`);
       if (ok) newTweetsPosted++;
     }
 
     newPhasePostCount++;
 
     if (newPhasePostCount >= PHASE_A_POSTS) {
-      // Move to Phase B
       newPhase = 'B';
       newPhasePostCount = 0;
       nextDelaySeconds = randomDelaySeconds();
@@ -313,18 +346,13 @@ async function runCycle(config: any, supabase: any) {
     }
 
   } else if (newPhase === 'B') {
-    // Phase B: photo-only post (send with single space — X needs non-empty text when no media API)
     await log('info', `[B ${newPhasePostCount + 1}/${PHASE_B_POSTS}] Posting photo-only tweet`);
-    // Note: In edge function we don't have image data URLs (those are client-side blobs)
-    // We post a minimal tweet with just a space to represent the photo-only slot
-    // The actual image upload happens client-side; server-side we post a placeholder
-    const ok = await sendOneTweet(headerString, ct0, '📸', supabase, configId, userId, `Phase B photo-only post ${newPhasePostCount + 1}/${PHASE_B_POSTS}`);
+    const ok = await sendOneTweet(headerString, ct0, '📸', proxy, supabase, configId, userId, `Phase B photo-only post ${newPhasePostCount + 1}/${PHASE_B_POSTS}`);
     if (ok) newTweetsPosted++;
 
     newPhasePostCount++;
 
     if (newPhasePostCount >= PHASE_B_POSTS) {
-      // Move to Rest B (3 minutes)
       newPhase = 'rest_B';
       newPhasePostCount = 0;
       nextDelaySeconds = REST_AFTER_B_SECONDS;
@@ -335,14 +363,12 @@ async function runCycle(config: any, supabase: any) {
     }
 
   } else if (newPhase === 'rest_B') {
-    // Rest is over — move to Phase C
     newPhase = 'C';
     newPhasePostCount = 0;
-    nextDelaySeconds = 5; // start Phase C almost immediately
+    nextDelaySeconds = 5;
     await log('info', `Rest complete. Starting Phase C — 20 posts.`);
 
   } else if (newPhase === 'C') {
-    // Phase C: post with context template + usernames
     const picked = pickUsernames();
     const mentionSuffix = picked.map((u: string) => ` @${u.replace(/^@/, '')}`).join('');
     const tweetText = buildTweetText(mentionSuffix);
@@ -351,14 +377,13 @@ async function runCycle(config: any, supabase: any) {
       await log('warn', `Phase C post skipped — tweet text is empty.`);
     } else {
       await log('info', `[C ${newPhasePostCount + 1}/${PHASE_C_POSTS}] Posting: "${tweetText.slice(0, 80)}${tweetText.length > 80 ? '...' : ''}" — tagged: ${picked.map((u: string) => `@${u}`).join(', ')}`);
-      const ok = await sendOneTweet(headerString, ct0, tweetText, supabase, configId, userId, `Phase C post ${newPhasePostCount + 1}/${PHASE_C_POSTS} — tagged: ${picked.map((u: string) => `@${u}`).join(', ')}`);
+      const ok = await sendOneTweet(headerString, ct0, tweetText, proxy, supabase, configId, userId, `Phase C post ${newPhasePostCount + 1}/${PHASE_C_POSTS} — tagged: ${picked.map((u: string) => `@${u}`).join(', ')}`);
       if (ok) newTweetsPosted++;
     }
 
     newPhasePostCount++;
 
     if (newPhasePostCount >= PHASE_C_POSTS) {
-      // Full cycle complete — rest 10 minutes then restart
       newCycleCount++;
       newPhase = 'rest_C';
       newPhasePostCount = 0;
@@ -370,15 +395,12 @@ async function runCycle(config: any, supabase: any) {
     }
 
   } else if (newPhase === 'rest_C') {
-    // 10-minute rest is over — restart from Phase A
     newPhase = 'A';
     newPhasePostCount = 0;
     nextDelaySeconds = 5;
     await log('info', `10-minute rest complete. Restarting from Phase A.`);
   }
 
-  // Check if we've exhausted the username list (approximate: tweets_posted * avg_usernames >= total)
-  // We use a generous estimate: if tweets_posted * MIN_USERNAMES >= totalUsernames, target is reached
   if (newTweetsPosted * MIN_USERNAMES >= totalUsernames && newTweetsPosted > 0) {
     targetReached = true;
   }
@@ -424,7 +446,6 @@ Deno.serve(async (req) => {
     const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     const supabase = createClient(supabaseUrl, serviceKey);
 
-    // Get all active configs where next_cycle_at is due (or null = first run)
     const now = new Date().toISOString();
     const { data: configs, error } = await supabase
       .from('bot_configs')

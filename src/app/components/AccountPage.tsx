@@ -10,9 +10,11 @@ import UsernameListManager from './UsernameListManager';
 import ImageAttachmentManager from './ImageAttachmentManager';
 import ActivityLog from './ActivityLog';
 import OpenRouterKeyCard from './OpenRouterKeyCard';
+import TwitterLoginCard from './TwitterLoginCard';
 import { parseCookieJson } from '../types/automation';
 import type { XAccount } from '../types/account';
 import type { LogEntry } from '../types/automation';
+import { getSessionForAccount, type AccountSession } from '@/lib/accountSessions';
 
 // ── Cycle constants ────────────────────────────────────────────────
 const PHASE_A_POSTS = 10;
@@ -46,12 +48,15 @@ export default function AccountPage({ account, onUpdate, onRemove, onBack }: Acc
     timestamp: new Date().toISOString().replace('T', ' ').slice(0, 19),
     level: 'info',
     message: `Account "${account.name}" ready. Configure and press Start.`,
-  }]);  const [nextCycleIn, setNextCycleIn] = useState<number | null>(null);
+  }]);
+  const [nextCycleIn, setNextCycleIn] = useState<number | null>(null);
   const [isStarting, setIsStarting] = useState(false);
   const [isTesting, setIsTesting] = useState(false);
   const [confirmStop, setConfirmStop] = useState(false);
   const [editingName, setEditingName] = useState(false);
   const [nameInput, setNameInput] = useState(account.name);
+  // Per-account Twitter session
+  const [accountSession, setAccountSession] = useState<AccountSession | null>(() => getSessionForAccount(account.id));
 
   const stopRef = useRef(false);
   const pauseRef = useRef(false);
@@ -71,6 +76,9 @@ export default function AccountPage({ account, onUpdate, onRemove, onBack }: Acc
   imagesRef.current = account.images;
   const openRouterKeyRef = useRef(account.openRouterKey);
   openRouterKeyRef.current = account.openRouterKey;
+  // Live ref for account session (OAuth token)
+  const accountSessionRef = useRef(accountSession);
+  accountSessionRef.current = accountSession;
 
   const addLog = useCallback((level: LogEntry['level'], message: string) => {
     const now = new Date();
@@ -155,46 +163,75 @@ export default function AccountPage({ account, onUpdate, onRemove, onBack }: Acc
   const sendTweet = useCallback(async (tweetText: string, imageDataUrl?: string): Promise<boolean> => {
     const MAX_RETRIES = 3;
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-      const rawCookies = cookiesRef.current;
+      const session = accountSessionRef.current;
       const freshProxy = proxyRef.current;
-      const parsed = parseCookieJson(rawCookies);
-      const ct0 = parsed.pairs['ct0'] ?? '';
 
-      if (!parsed.hasAuthToken || !ct0) {
-        addLog('error', `[${account.name}] Tweet aborted — missing auth_token or ct0.`);
+      // Prefer OAuth token; fall back to cookies
+      const oauthToken = session?.accessToken;
+      const rawCookies = cookiesRef.current;
+
+      if (!oauthToken && !rawCookies.trim()) {
+        addLog('error', `[${account.name}] Tweet aborted — not signed in with X and no cookies set.`);
         return false;
+      }
+
+      // Cookie-based auth validation (only if not using OAuth)
+      if (!oauthToken) {
+        const parsed = parseCookieJson(rawCookies);
+        const ct0 = parsed.pairs['ct0'] ?? '';
+        if (!parsed.hasAuthToken || !ct0) {
+          addLog('error', `[${account.name}] Tweet aborted — missing auth_token or ct0.`);
+          return false;
+        }
       }
 
       try {
         if (attempt > 1) addLog('warn', `[${account.name}] Retry ${attempt - 1}/${MAX_RETRIES - 1}…`);
 
-        const res = await fetch('/api/tweet', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
+        let body: Record<string, unknown> = { tweetText };
+
+        if (oauthToken) {
+          // OAuth 2.0 path
+          body.accessToken = oauthToken;
+          if (imageDataUrl) body.imageDataUrl = imageDataUrl;
+          if (freshProxy) body.proxy = freshProxy;
+        } else {
+          // Legacy cookie path
+          const parsed = parseCookieJson(rawCookies);
+          const ct0 = parsed.pairs['ct0'] ?? '';
+          body = {
             cookieString: parsed.headerString,
             ct0,
             tweetText,
             ...(imageDataUrl ? { imageDataUrl } : {}),
             ...(freshProxy ? { proxy: freshProxy } : {}),
             forceRefresh: attempt > 1,
-          }),
+          };
+        }
+
+        const res = await fetch('/api/tweet', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
         });
 
         const data = await res.json() as Record<string, unknown>;
 
         if (res.ok && data.success) {
-          const newCt0 = data.newCt0 as string | null | undefined;
-          if (newCt0) {
-            try {
-              const cookieArray = JSON.parse(rawCookies) as Array<{ name: string; value: string }>;
-              if (Array.isArray(cookieArray)) {
-                const idx = cookieArray.findIndex(c => c.name === 'ct0');
-                if (idx !== -1) cookieArray[idx] = { ...cookieArray[idx], value: newCt0 };
-                else cookieArray.push({ name: 'ct0', value: newCt0 });
-                onUpdate(account.id, { cookies: JSON.stringify(cookieArray) });
-              }
-            } catch { /* non-critical */ }
+          // Update ct0 if returned (cookie path only)
+          if (!oauthToken) {
+            const newCt0 = data.newCt0 as string | null | undefined;
+            if (newCt0) {
+              try {
+                const cookieArray = JSON.parse(rawCookies) as Array<{ name: string; value: string }>;
+                if (Array.isArray(cookieArray)) {
+                  const idx = cookieArray.findIndex(c => c.name === 'ct0');
+                  if (idx !== -1) cookieArray[idx] = { ...cookieArray[idx], value: newCt0 };
+                  else cookieArray.push({ name: 'ct0', value: newCt0 });
+                  onUpdate(account.id, { cookies: JSON.stringify(cookieArray) });
+                }
+              } catch { /* non-critical */ }
+            }
           }
 
           const tweetData = data.data as { data?: { create_tweet?: { tweet_results?: { result?: { rest_id?: string } } } } } | undefined;
@@ -205,7 +242,7 @@ export default function AccountPage({ account, onUpdate, onRemove, onBack }: Acc
 
         const errMsg = (data.error as string) ?? `HTTP ${res.status}`;
         if (res.status === 401 || res.status === 403) {
-          addLog('error', `[${account.name}] Auth error — stopping. Refresh cookies.`);
+          addLog('error', `[${account.name}] Auth error — stopping. Re-authenticate your X account.`);
           stopRef.current = true;
           return false;
         }
@@ -236,7 +273,7 @@ export default function AccountPage({ account, onUpdate, onRemove, onBack }: Acc
     const baseTemplate = contextRef.current.trim();
     let aiText: string | null = null;
     if (baseTemplate) aiText = await generateTweetWithAI(baseTemplate);
-    const body = (aiText ?? baseTemplate) || '';
+    let body = (aiText ?? baseTemplate) || '';
     const imageUrl = pickRandomImage();
     const picked = pickRandomUsernames();
     const mentionSuffix = picked.map(u => ` @${u.replace(/^@/, '')}`).join('');
@@ -345,7 +382,12 @@ export default function AccountPage({ account, onUpdate, onRemove, onBack }: Acc
 
   const handleStart = useCallback(async () => {
     if (isRunningRef.current) return;
-    if (!account.cookies.trim()) { toast.error('Add session cookies first'); return; }
+    const session = accountSessionRef.current;
+    const hasCookies = account.cookies.trim().length > 0;
+    if (!session?.accessToken && !hasCookies) {
+      toast.error('Sign in with X first (or add session cookies)');
+      return;
+    }
     setIsStarting(true);
     await new Promise(r => setTimeout(r, 100));
     setIsStarting(false);
@@ -377,13 +419,18 @@ export default function AccountPage({ account, onUpdate, onRemove, onBack }: Acc
 
   const handleTest = useCallback(async () => {
     if (isTesting) return;
-    if (!account.cookies.trim()) { toast.error('Add session cookies first'); return; }
+    const session = accountSessionRef.current;
+    const hasCookies = account.cookies.trim().length > 0;
+    if (!session?.accessToken && !hasCookies) {
+      toast.error('Sign in with X first (or add session cookies)');
+      return;
+    }
     setIsTesting(true);
     addLog('info', `[${account.name}] 🧪 Test tweet…`);
     const ok = await sendTweet('🧪 XAutomate test tweet — ignore this!');
     setIsTesting(false);
     if (ok) toast.success('Test tweet sent!');
-    else toast.error('Test tweet failed — check cookies');
+    else toast.error('Test tweet failed — check your X login');
   }, [account.cookies, account.name, addLog, isTesting, sendTweet]);
 
   const handleSaveName = useCallback(() => {
@@ -575,10 +622,12 @@ export default function AccountPage({ account, onUpdate, onRemove, onBack }: Acc
       {/* ── Config tab ──────────────────────────────────────────── */}
       {activeTab === 'config' && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          <SessionCookiesCard
-            value={account.cookies}
-            onChange={v => onUpdate(account.id, { cookies: v })}
+          {/* Twitter Login — always first, uses per-account session */}
+          <TwitterLoginCard
+            accountId={account.id}
+            proxy={account.proxy}
             isRunning={isActive}
+            onSessionChange={setAccountSession}
           />
           <ProxyConfigCard
             value={account.proxy}
@@ -604,6 +653,12 @@ export default function AccountPage({ account, onUpdate, onRemove, onBack }: Acc
           <ImageAttachmentManager
             images={account.images}
             onChange={v => onUpdate(account.id, { images: v })}
+            isRunning={isActive}
+          />
+          {/* Legacy cookies — kept as fallback */}
+          <SessionCookiesCard
+            value={account.cookies}
+            onChange={v => onUpdate(account.id, { cookies: v })}
             isRunning={isActive}
           />
         </div>
