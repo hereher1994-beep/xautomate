@@ -118,6 +118,8 @@ export default function AutomationControlPanel({ account, onAccountChange }: Aut
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const cycleCountRef = useRef(cycleCount);
   cycleCountRef.current = cycleCount;
+  // Track consecutive auth failures — only stop after 3 in a row
+  const consecutiveAuthFailuresRef = useRef(0);
 
   // ── Live refs so fireCycle always reads current state ──────────────
   const imagesRef = useRef(images);
@@ -235,6 +237,8 @@ export default function AutomationControlPanel({ account, onAccountChange }: Aut
         const mediaNote = data.mediaId ? ` + image "${chosenImageName}"` : '';
         const usersNote = pickedUsernames.length > 0 ? ` — tagged: ${pickedUsernames.map(u => `@${u}`).join(', ')}` : '';
         addLog('success', `✓ Tweet sent${mediaNote}${tweetId ? ` (ID: ${tweetId})` : ''}${usersNote}`);
+        // Reset auth failure counter on success
+        consecutiveAuthFailuresRef.current = 0;
 
         // ── ct0 rotation: save new token if X rotated it ──────────────
         if (data.newCt0 && typeof data.newCt0 === 'string' && data.newCt0 !== ct0) {
@@ -245,10 +249,34 @@ export default function AutomationControlPanel({ account, onAccountChange }: Aut
         addLog('error', `✗ Tweet failed: ${errMsg}`);
 
         if (res.status === 401 || res.status === 403) {
-          addLog('error', 'Authentication error — stopping automation. Refresh your X session cookies.');
-          setStatus('error');
-          if (intervalRef.current) clearInterval(intervalRef.current);
-          if (countdownRef.current) clearInterval(countdownRef.current);
+          consecutiveAuthFailuresRef.current += 1;
+          const failCount = consecutiveAuthFailuresRef.current;
+
+          // Re-read cookies from localStorage in case user just pasted fresh ones
+          let freshCookieRaw = cookiesRef.current;
+          try {
+            const lsRaw = localStorage.getItem(lsKey);
+            if (lsRaw) {
+              const lsParsed = JSON.parse(lsRaw);
+              if (lsParsed?.cookies && typeof lsParsed.cookies === 'string' && lsParsed.cookies.trim()) {
+                freshCookieRaw = lsParsed.cookies;
+                if (freshCookieRaw !== cookiesRef.current) {
+                  setCookies(freshCookieRaw);
+                  addLog('info', `Auth failure #${failCount} — reloaded fresh cookies from storage.`);
+                }
+              }
+            }
+          } catch { /* ignore */ }
+
+          if (failCount >= 3) {
+            addLog('error', `Authentication error after ${failCount} consecutive failures — stopping automation. Paste fresh X session cookies and restart.`);
+            setStatus('error');
+            if (intervalRef.current) clearInterval(intervalRef.current);
+            if (countdownRef.current) clearInterval(countdownRef.current);
+            consecutiveAuthFailuresRef.current = 0;
+          } else {
+            addLog('warn', `Auth failure #${failCount}/3 — automation continues. If you just pasted new cookies, the next cycle will use them.`);
+          }
           return;
         }
       }
