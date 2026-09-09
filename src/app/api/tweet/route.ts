@@ -191,13 +191,6 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  if (tweetText.length > 280) {
-    return NextResponse.json(
-      { error: `Tweet text too long: ${tweetText.length} chars (max 280)` },
-      { status: 400 }
-    );
-  }
-
   // Upload image if provided
   let mediaId: string | undefined;
   if (imageDataUrl) {
@@ -241,13 +234,6 @@ export async function POST(req: NextRequest) {
       if (result.status === 404) {
         errors.push({ queryId, status: result.status, body: result.body });
         continue;
-      }
-
-      if (result.status === 429) {
-        return NextResponse.json(
-          { error: 'Rate limited by X. Wait before retrying.', status: 429, detail: result.body },
-          { status: 429 }
-        );
       }
 
       errors.push({ queryId, status: result.status, body: result.body });
