@@ -1,8 +1,9 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { LogOut, CheckCircle, RefreshCw, Eye, EyeOff, Loader2, AlertCircle, User, Lock } from 'lucide-react';
+import { LogOut, CheckCircle, RefreshCw, Eye, EyeOff, Loader2, AlertCircle, User, Lock, Globe } from 'lucide-react';
 import { saveSession, getSessionForAccount, removeSession, type AccountSession } from '@/lib/accountSessions';
+import XBrowserLoginModal from './XBrowserLoginModal';
 
 interface TwitterLoginCardProps {
   accountId: string;
@@ -18,6 +19,7 @@ export default function TwitterLoginCard({ accountId, proxy, isRunning, onSessio
   const [showPassword, setShowPassword] = useState(false);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [loginError, setLoginError] = useState('');
+  const [showBrowserModal, setShowBrowserModal] = useState(false);
 
   useEffect(() => {
     const stored = getSessionForAccount(accountId);
@@ -90,10 +92,24 @@ export default function TwitterLoginCard({ accountId, proxy, isRunning, onSessio
     setLoginError('');
   };
 
+  const handleBrowserSessionCaptured = (session: AccountSession) => {
+    setAccountSession(session);
+    onSessionChange?.(session);
+    setShowBrowserModal(false);
+  };
+
   const isLoggedIn = !!accountSession?.authToken;
 
   return (
     <div className="config-card">
+      {showBrowserModal && (
+        <XBrowserLoginModal
+          accountId={accountId}
+          proxy={proxy}
+          onClose={() => setShowBrowserModal(false)}
+          onSessionCaptured={handleBrowserSessionCaptured}
+        />
+      )}
       <div className="flex items-center gap-2 mb-3">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" className="text-primary" aria-hidden="true">
           <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-4.714-6.231-5.401 6.231H2.744l7.73-8.835L1.254 2.25H8.08l4.253 5.622 5.91-5.622Zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
@@ -184,6 +200,29 @@ export default function TwitterLoginCard({ accountId, proxy, isRunning, onSessio
               </span>
             )}
           </p>
+
+          {/* Browser Login Button */}
+          <button
+            type="button"
+            onClick={() => setShowBrowserModal(true)}
+            disabled={isLoggingIn}
+            className="flex items-center justify-center gap-2 w-full py-2.5 px-3 rounded-lg text-sm font-semibold transition-all"
+            style={{
+              backgroundColor: 'rgba(0,212,170,0.1)',
+              color: 'var(--primary)',
+              border: '1px solid rgba(0,212,170,0.3)',
+              opacity: isLoggingIn ? 0.6 : 1,
+            }}
+          >
+            <Globe size={14} />
+            Open X Browser Login
+          </button>
+
+          <div className="flex items-center gap-2">
+            <div className="flex-1 h-px" style={{ backgroundColor: 'var(--border)' }} />
+            <span className="text-xs text-muted-foreground">or enter credentials manually</span>
+            <div className="flex-1 h-px" style={{ backgroundColor: 'var(--border)' }} />
+          </div>
 
           {/* Username */}
           <div className="flex flex-col gap-1">
