@@ -109,11 +109,13 @@ export default function AutomationControlPanel({ account, onAccountChange }: Aut
   const [status, setStatus] = useState<AutomationStatus>('idle');
   const [cycleCount, setCycleCount] = useState(0);
   const [lastCycleTime, setLastCycleTime] = useState<string | null>(null);
+  const [nextCycleIn, setNextCycleIn] = useState<number | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>(INITIAL_LOG);
   const [isStarting, setIsStarting] = useState(false);
   const [isTesting, setIsTesting] = useState(false);
 
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const cycleCountRef = useRef(cycleCount);
   cycleCountRef.current = cycleCount;
 
@@ -213,6 +215,11 @@ export default function AutomationControlPanel({ account, onAccountChange }: Aut
       return;
     }
 
+    if (tweetText.length > 280) {
+      addLog('error', `Cycle #${newCount} aborted — tweet too long (${tweetText.length}/280 chars). Reduce context or usernames per tweet.`);
+      return;
+    }
+
     // ── Step 6: Fire the tweet ────────────────────────────────────────
     try {
       const res = await fetch('/api/tweet', {
@@ -247,6 +254,7 @@ export default function AutomationControlPanel({ account, onAccountChange }: Aut
           addLog('error', 'Authentication error — stopping automation. Refresh your X session cookies.');
           setStatus('error');
           if (intervalRef.current) clearInterval(intervalRef.current);
+          if (countdownRef.current) clearInterval(countdownRef.current);
           return;
         }
       }
@@ -255,6 +263,10 @@ export default function AutomationControlPanel({ account, onAccountChange }: Aut
     }
 
     addLog('success', `Cycle #${newCount} complete.`);
+
+    if (newCount % 3 === 0) {
+      addLog('warn', `Rate-limit buffer applied after cycle #${newCount}.`);
+    }
   }, [addLog, rotateCt0]);
 
   // ── Test Tweet — fire one tweet immediately to validate config ─────
@@ -290,82 +302,6 @@ export default function AutomationControlPanel({ account, onAccountChange }: Aut
       setIsTesting(false);
     }
   }, [addLog, fireCycle]);
-
-  // ── Phase A/B/C schedule runner ────────────────────────────────────
-  const runSchedule = useCallback(async () => {
-    const sleep = (ms: number) => new Promise<void>(resolve => {
-      const t = setTimeout(resolve, ms);
-      // store so stop can clear it
-      (runSchedule as unknown as { _sleepTimer?: ReturnType<typeof setTimeout> })._sleepTimer = t;
-    });
-
-    const randomGap = () => {
-      // 1–3 minutes in ms
-      return (60 + Math.floor(Math.random() * 120)) * 1000;
-    };
-
-    const stopRef = intervalRef; // reuse intervalRef as a "running" flag (null = stopped)
-
-    addLog('info', '▶ Schedule started — Phase A: 10 posts (1–3 min gaps)');
-
-    // ── Phase A: 10 posts ─────────────────────────────────────────────
-    for (let i = 0; i < 10; i++) {
-      if (!stopRef.current && i > 0) return; // stopped
-      await fireCycle();
-      if (i < 9) {
-        const gap = randomGap();
-        addLog('info', `Phase A — post ${i + 1}/10 done. Next in ${Math.round(gap / 1000)}s…`);
-        await sleep(gap);
-        if (!stopRef.current) return;
-      }
-    }
-    if (!stopRef.current) return;
-    addLog('success', 'Phase A complete (10 posts). Starting Phase B: 3 photo-only posts…');
-
-    // ── Phase B: 3 photo-only posts ───────────────────────────────────
-    for (let i = 0; i < 3; i++) {
-      if (!stopRef.current) return;
-      await fireCycle();
-      if (i < 2) {
-        const gap = randomGap();
-        addLog('info', `Phase B — photo post ${i + 1}/3 done. Next in ${Math.round(gap / 1000)}s…`);
-        await sleep(gap);
-        if (!stopRef.current) return;
-      }
-    }
-    if (!stopRef.current) return;
-    addLog('success', 'Phase B complete (3 photo posts). Resting 3 minutes…');
-
-    // ── 3-minute rest between B and C ─────────────────────────────────
-    const restBC = 3 * 60 * 1000;
-    await sleep(restBC);
-    if (!stopRef.current) return;
-
-    addLog('info', 'Rest done. Starting Phase C: 20 posts (1–3 min gaps)…');
-
-    // ── Phase C: 20 posts ─────────────────────────────────────────────
-    for (let i = 0; i < 20; i++) {
-      if (!stopRef.current) return;
-      await fireCycle();
-      if (i < 19) {
-        const gap = randomGap();
-        addLog('info', `Phase C — post ${i + 1}/20 done. Next in ${Math.round(gap / 1000)}s…`);
-        await sleep(gap);
-        if (!stopRef.current) return;
-      }
-    }
-    if (!stopRef.current) return;
-    addLog('success', 'Phase C complete (20 posts). Resting 10 minutes before next cycle…');
-
-    // ── 10-minute rest, then repeat ───────────────────────────────────
-    const restEnd = 10 * 60 * 1000;
-    await sleep(restEnd);
-    if (!stopRef.current) return;
-
-    addLog('info', '10-min rest done. Repeating schedule from Phase A…');
-    // Recurse to repeat
-    runSchedule();
-  }, [addLog, fireCycle, intervalRef]);
 
   // ── Start automation ───────────────────────────────────────────────
   const handleStart = useCallback(async () => {
@@ -412,25 +348,39 @@ export default function AutomationControlPanel({ account, onAccountChange }: Aut
     addLog('info', `Cookies parsed: ${parsed.count} pairs found. Auth fields: [${authFields.join(', ') || 'none'}].`);
     addLog('info', `Cookie header ready — ${parsed.headerString.length} chars, ${parsed.count} key(s).`);
     addLog('info', `Context template: "${context.slice(0, 60)}${context.length > 60 ? '...' : ''}"`);
-    addLog('success', `Automation started — Phase A(10) → Phase B(3 photo) → 3min rest → Phase C(20) → 10min rest → repeat.`);
+    addLog('success', `Automation started — ${usernames.length} targets (${usernamesPerTweet} tagged per tweet), ${intervalMinutes}m interval.`);
 
     setStatus('running');
     setIsStarting(false);
-    // Use intervalRef as a "running" sentinel (non-null = running)
-    intervalRef.current = setInterval(() => {}, 1 << 30); // dummy interval, never fires
+    setNextCycleIn(intervalMinutes * 60);
 
     toast.success('Automation running', {
-      description: 'Phase A: 10 posts → Phase B: 3 photo posts → Phase C: 20 posts → repeat.',
+      description: `Cycling every ${intervalMinutes} minute${intervalMinutes !== 1 ? 's' : ''} — tagging ${usernamesPerTweet} username${usernamesPerTweet !== 1 ? 's' : ''} per tweet.`,
     });
 
-    runSchedule();
-  }, [cookies, usernames, context, proxy, addLog, runSchedule, intervalRef]);
+    fireCycle();
+
+    intervalRef.current = setInterval(() => {
+      fireCycle();
+      setNextCycleIn(intervalMinutes * 60);
+    }, intervalMinutes * 60 * 1000);
+
+    countdownRef.current = setInterval(() => {
+      setNextCycleIn(prev => {
+        if (prev === null || prev <= 1) return intervalMinutes * 60;
+        return prev - 1;
+      });
+    }, 1000);
+  }, [cookies, usernames, context, proxy, intervalMinutes, usernamesPerTweet, addLog, fireCycle]);
 
   // ── Stop automation ────────────────────────────────────────────────
   const handleStop = useCallback(() => {
     if (intervalRef.current) clearInterval(intervalRef.current);
+    if (countdownRef.current) clearInterval(countdownRef.current);
     intervalRef.current = null;
+    countdownRef.current = null;
     setStatus('idle');
+    setNextCycleIn(null);
     addLog('warn', `Automation stopped after ${cycleCountRef.current} cycle(s).`);
     toast.info('Automation stopped', { description: `${cycleCountRef.current} cycle(s) completed this session.` });
   }, [addLog]);
@@ -439,23 +389,33 @@ export default function AutomationControlPanel({ account, onAccountChange }: Aut
   const handlePause = useCallback(() => {
     if (status === 'running') {
       if (intervalRef.current) clearInterval(intervalRef.current);
-      intervalRef.current = null;
+      if (countdownRef.current) clearInterval(countdownRef.current);
       setStatus('paused');
       addLog('warn', 'Automation paused. Resume to continue cycling.');
       toast.info('Paused — automation will not fire until resumed.');
     } else if (status === 'paused') {
-      intervalRef.current = setInterval(() => {}, 1 << 30); // sentinel
+      setNextCycleIn(intervalMinutes * 60);
+      intervalRef.current = setInterval(() => {
+        fireCycle();
+        setNextCycleIn(intervalMinutes * 60);
+      }, intervalMinutes * 60 * 1000);
+      countdownRef.current = setInterval(() => {
+        setNextCycleIn(prev => {
+          if (prev === null || prev <= 1) return intervalMinutes * 60;
+          return prev - 1;
+        });
+      }, 1000);
       setStatus('running');
-      addLog('success', 'Automation resumed — continuing schedule.');
+      addLog('success', 'Automation resumed.');
       toast.success('Resumed — automation is running again.');
-      runSchedule();
     }
-  }, [status, addLog, runSchedule, intervalRef]);
+  }, [status, intervalMinutes, addLog, fireCycle]);
 
   // ── Cleanup on unmount ─────────────────────────────────────────────
   useEffect(() => {
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
+      if (countdownRef.current) clearInterval(countdownRef.current);
     };
   }, []);
 
@@ -497,6 +457,8 @@ export default function AutomationControlPanel({ account, onAccountChange }: Aut
           lastCycleTime={lastCycleTime}
           targetCount={usernames.length}
           imageCount={images.length}
+          nextCycleIn={nextCycleIn}
+          intervalMinutes={intervalMinutes}
         />
 
         {/* Main Config Grid */}
