@@ -20,12 +20,9 @@ interface CycleControlCardProps {
   onTestTweet: () => void;
 }
 
-const PRESET_INTERVALS = [5, 10, 15, 30, 60, 120];
 const PRESET_USERNAMES_PER_TWEET = [4, 8, 12, 16];
 
 export default function CycleControlCard({
-  intervalMinutes,
-  onIntervalChange,
   usernamesPerTweet,
   onUsernamesPerTweetChange,
   totalUsernames,
@@ -54,16 +51,8 @@ export default function CycleControlCard({
     onStop();
   };
 
-  const increment = () => onIntervalChange(Math.min(intervalMinutes + 1, 1440));
-  const decrement = () => onIntervalChange(Math.max(intervalMinutes - 1, 1));
-
   const incrementUpt = () => onUsernamesPerTweetChange(Math.min(usernamesPerTweet + 1, Math.max(totalUsernames, 1)));
   const decrementUpt = () => onUsernamesPerTweetChange(Math.max(usernamesPerTweet - 1, 1));
-
-  const handleIntervalInput = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const v = parseInt(e.target.value, 10);
-    if (!isNaN(v) && v >= 1 && v <= 1440) onIntervalChange(v);
-  };
 
   const handleUptInput = (e: React.ChangeEvent<HTMLInputElement>) => {
     const v = parseInt(e.target.value, 10);
@@ -77,78 +66,8 @@ export default function CycleControlCard({
         <span className="text-sm font-semibold text-foreground">Cycle Control</span>
       </div>
 
-      {/* Interval input */}
-      <label className="config-label">Cycle Interval</label>
-      <p className="text-xs text-muted-foreground mb-2">
-        Time between each automation cycle. Minimum 1 minute, maximum 24 hours (1440 min).
-      </p>
-
-      <div className="flex items-center gap-3 mb-3">
-        <div className="flex items-center rounded overflow-hidden"
-          style={{ border: '1px solid var(--border)', backgroundColor: 'var(--input)' }}>
-          <button
-            type="button"
-            className="px-2.5 py-2 text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
-            onClick={decrement}
-            disabled={intervalMinutes <= 1 || isActive}
-            aria-label="Decrease interval"
-          >
-            <ChevronDown size={14} />
-          </button>
-          <input
-            type="number"
-            className="font-mono-data text-sm font-semibold text-center bg-transparent text-foreground outline-none"
-            style={{ width: '56px', border: 'none' }}
-            value={intervalMinutes}
-            onChange={handleIntervalInput}
-            min={1}
-            max={1440}
-            disabled={isActive}
-          />
-          <span className="text-xs text-muted-foreground pr-2">min</span>
-          <button
-            type="button"
-            className="px-2.5 py-2 text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
-            onClick={increment}
-            disabled={intervalMinutes >= 1440 || isActive}
-            aria-label="Increase interval"
-          >
-            <ChevronUp size={14} />
-          </button>
-        </div>
-
-        <div className="flex flex-wrap gap-1.5">
-          {PRESET_INTERVALS.map(p => (
-            <button
-              key={`preset-${p}`}
-              type="button"
-              className="font-mono-data text-xs px-2 py-1 rounded transition-all"
-              style={{
-                backgroundColor: intervalMinutes === p ? 'var(--primary)' : 'var(--input)',
-                color: intervalMinutes === p ? 'var(--primary-foreground)' : 'var(--muted-foreground)',
-                border: `1px solid ${intervalMinutes === p ? 'var(--primary)' : 'var(--border)'}`,
-              }}
-              onClick={() => !isActive && onIntervalChange(p)}
-              disabled={isActive}
-            >
-              {p >= 60 ? `${p / 60}h` : `${p}m`}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {intervalMinutes < 5 && (
-        <div className="mb-3 flex items-start gap-1.5 p-2 rounded"
-          style={{ backgroundColor: 'rgba(245,158,11,0.07)', border: '1px solid rgba(245,158,11,0.2)' }}>
-          <AlertTriangle size={12} className="text-accent mt-0.5 flex-shrink-0" />
-          <p className="text-xs" style={{ color: 'var(--accent)' }}>
-            Very short intervals ({intervalMinutes}m) may trigger rate limiting. 10–30 minutes is recommended.
-          </p>
-        </div>
-      )}
-
       {/* Usernames per tweet */}
-      <label className="config-label mt-1">Usernames Tagged per Tweet</label>
+      <label className="config-label">Usernames Tagged per Tweet</label>
       <p className="text-xs text-muted-foreground mb-2">
         Bot randomly picks this many usernames from your list and appends them at the end of each tweet.
       </p>
@@ -213,18 +132,11 @@ export default function CycleControlCard({
       )}
 
       {/* Cycle stats */}
-      <div className="grid grid-cols-2 gap-2 mb-4">
+      <div className="mb-4">
         <div className="rounded p-2.5"
           style={{ backgroundColor: 'var(--input)', border: '1px solid var(--border)' }}>
           <span className="config-label mb-0.5">Cycles Completed</span>
           <span className="font-mono-data text-lg font-bold text-foreground">{cycleCount}</span>
-        </div>
-        <div className="rounded p-2.5"
-          style={{ backgroundColor: 'var(--input)', border: '1px solid var(--border)' }}>
-          <span className="config-label mb-0.5">Est. Daily Cycles</span>
-          <span className="font-mono-data text-lg font-bold text-foreground">
-            {Math.floor(1440 / intervalMinutes)}
-          </span>
         </div>
       </div>
 
